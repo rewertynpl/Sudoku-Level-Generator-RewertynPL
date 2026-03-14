@@ -61,6 +61,7 @@ inline ApplyResult apply_sk_loop_exact(CandidateState& st, StrategyStats& s, Gen
     const int probe_steps = std::clamp(6 + n / 4, 8, 12);
     int patterns = 0;
     bool progress = false;
+    bool stop_search = false;
     auto& sp = shared::exact_pattern_scratchpad();
 
     // Przeszukiwanie wierzchoĹ‚kĂłw dla SK Loop
@@ -69,8 +70,8 @@ inline ApplyResult apply_sk_loop_exact(CandidateState& st, StrategyStats& s, Gen
             for (int c1 = 0; c1 < n; ++c1) {
                 for (int c2 = c1 + 1; c2 < n; ++c2) {
                     if (patterns >= pattern_cap) {
-                        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                        return ApplyResult::NoProgress;
+                        stop_search = true;
+                        break;
                     }
                     const int a = r1 * n + c1;
                     const int b = r1 * n + c2;
@@ -270,9 +271,13 @@ inline ApplyResult apply_sk_loop_exact(CandidateState& st, StrategyStats& s, Gen
                             progress = progress || (er == ApplyResult::Progress);
                         }
                     }
+                if (stop_search) break;
                 }
+                if (stop_search) break;
             }
+            if (stop_search) break;
         }
+        if (stop_search) break;
     }
 
     if (progress) {

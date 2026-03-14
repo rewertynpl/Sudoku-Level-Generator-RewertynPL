@@ -310,7 +310,7 @@ inline ApplyResult msls_sector_pass(
 
         for (int ri = 0; ri < rows; ++ri) {
             for (int ci = 0; ci < cols; ++ci) {
-                if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                 std::fill_n(row_sel, n, 0);
                 std::fill_n(col_sel, n, 0);
                 std::fill_n(box_sel, n, 0);
@@ -324,7 +324,7 @@ inline ApplyResult msls_sector_pass(
 
         for (int ri = 0; ri < rows; ++ri) {
             for (int bi = 0; bi < boxes; ++bi) {
-                if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                 std::fill_n(row_sel, n, 0);
                 std::fill_n(col_sel, n, 0);
                 std::fill_n(box_sel, n, 0);
@@ -338,7 +338,7 @@ inline ApplyResult msls_sector_pass(
 
         for (int ci = 0; ci < cols; ++ci) {
             for (int bi = 0; bi < boxes; ++bi) {
-                if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                 std::fill_n(row_sel, n, 0);
                 std::fill_n(col_sel, n, 0);
                 std::fill_n(box_sel, n, 0);
@@ -353,7 +353,7 @@ inline ApplyResult msls_sector_pass(
         for (int ri = 0; ri < rows; ++ri) {
             for (int ci = 0; ci < cols; ++ci) {
                 for (int bi = 0; bi < boxes; ++bi) {
-                    if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                     std::fill_n(row_sel, n, 0);
                     std::fill_n(col_sel, n, 0);
                     std::fill_n(box_sel, n, 0);
@@ -372,7 +372,7 @@ inline ApplyResult msls_sector_pass(
         for (int r1 = 0; r1 < rows; ++r1) {
             for (int r2 = r1 + 1; r2 < rows; ++r2) {
                 for (int bi = 0; bi < boxes; ++bi) {
-                    if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                     std::fill_n(row_sel, n, 0);
                     std::fill_n(col_sel, n, 0);
                     std::fill_n(box_sel, n, 0);
@@ -389,7 +389,7 @@ inline ApplyResult msls_sector_pass(
         for (int c1 = 0; c1 < cols; ++c1) {
             for (int c2 = c1 + 1; c2 < cols; ++c2) {
                 for (int bi = 0; bi < boxes; ++bi) {
-                    if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                     std::fill_n(row_sel, n, 0);
                     std::fill_n(col_sel, n, 0);
                     std::fill_n(box_sel, n, 0);
@@ -406,7 +406,7 @@ inline ApplyResult msls_sector_pass(
         for (int ri = 0; ri < rows; ++ri) {
             for (int b1 = 0; b1 < boxes; ++b1) {
                 for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                    if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                     std::fill_n(row_sel, n, 0);
                     std::fill_n(col_sel, n, 0);
                     std::fill_n(box_sel, n, 0);
@@ -423,7 +423,7 @@ inline ApplyResult msls_sector_pass(
         for (int ci = 0; ci < cols; ++ci) {
             for (int b1 = 0; b1 < boxes; ++b1) {
                 for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                    if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                     std::fill_n(row_sel, n, 0);
                     std::fill_n(col_sel, n, 0);
                     std::fill_n(box_sel, n, 0);
@@ -441,7 +441,7 @@ inline ApplyResult msls_sector_pass(
             for (int r2 = r1 + 1; r2 < rows; ++r2) {
                 for (int c1 = 0; c1 < cols; ++c1) {
                     for (int c2 = c1 + 1; c2 < cols; ++c2) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                        if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -461,7 +461,7 @@ inline ApplyResult msls_sector_pass(
             for (int r2 = r1 + 1; r2 < rows; ++r2) {
                 for (int r3 = r2 + 1; r3 < rows; ++r3) {
                     for (int bi = 0; bi < boxes; ++bi) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                        if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -481,7 +481,7 @@ inline ApplyResult msls_sector_pass(
             for (int c2 = c1 + 1; c2 < cols; ++c2) {
                 for (int c3 = c2 + 1; c3 < cols; ++c3) {
                     for (int bi = 0; bi < boxes; ++bi) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                        if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -501,7 +501,7 @@ inline ApplyResult msls_sector_pass(
             for (int r2 = r1 + 1; r2 < rows; ++r2) {
                 for (int b1 = 0; b1 < boxes; ++b1) {
                     for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                        if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -521,7 +521,7 @@ inline ApplyResult msls_sector_pass(
             for (int r2 = r1 + 1; r2 < rows; ++r2) {
                 for (int ci = 0; ci < cols; ++ci) {
                     for (int bi = 0; bi < boxes; ++bi) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -541,7 +541,7 @@ inline ApplyResult msls_sector_pass(
             for (int c1 = 0; c1 < cols; ++c1) {
                 for (int c2 = c1 + 1; c2 < cols; ++c2) {
                     for (int bi = 0; bi < boxes; ++bi) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -561,7 +561,7 @@ inline ApplyResult msls_sector_pass(
             for (int c2 = c1 + 1; c2 < cols; ++c2) {
                 for (int b1 = 0; b1 < boxes; ++b1) {
                     for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -581,7 +581,7 @@ inline ApplyResult msls_sector_pass(
             for (int ci = 0; ci < cols; ++ci) {
                 for (int b1 = 0; b1 < boxes; ++b1) {
                     for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                        if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                    if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                         std::fill_n(row_sel, n, 0);
                         std::fill_n(col_sel, n, 0);
                         std::fill_n(box_sel, n, 0);
@@ -602,7 +602,7 @@ inline ApplyResult msls_sector_pass(
                 for (int r3 = r2 + 1; r3 < rows; ++r3) {
                     for (int b1 = 0; b1 < boxes; ++b1) {
                         for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                            if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                            if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                             std::fill_n(row_sel, n, 0);
                             std::fill_n(col_sel, n, 0);
                             std::fill_n(box_sel, n, 0);
@@ -625,7 +625,7 @@ inline ApplyResult msls_sector_pass(
                 for (int c3 = c2 + 1; c3 < cols; ++c3) {
                     for (int b1 = 0; b1 < boxes; ++b1) {
                         for (int b2 = b1 + 1; b2 < boxes; ++b2) {
-                            if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                            if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                             std::fill_n(row_sel, n, 0);
                             std::fill_n(col_sel, n, 0);
                             std::fill_n(box_sel, n, 0);
@@ -648,7 +648,7 @@ inline ApplyResult msls_sector_pass(
                 for (int c1 = 0; c1 < cols; ++c1) {
                     for (int c2 = c1 + 1; c2 < cols; ++c2) {
                         for (int bi = 0; bi < boxes; ++bi) {
-                            if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+                            if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
                             std::fill_n(row_sel, n, 0);
                             std::fill_n(col_sel, n, 0);
                             std::fill_n(box_sel, n, 0);
@@ -665,6 +665,8 @@ inline ApplyResult msls_sector_pass(
                 }
             }
         }
+next_digit:
+        continue;
     }
 
     return ApplyResult::NoProgress;
@@ -708,7 +710,7 @@ inline ApplyResult apply_msls_anchor_direct(CandidateState& st) {
 
         const int anchors = std::min(cc, anchor_cap);
         for (int ai = 0; ai < anchors; ++ai) {
-            if (pattern_count >= pattern_cap || probe_budget <= 0) return ApplyResult::NoProgress;
+            if (pattern_count >= pattern_cap || probe_budget <= 0) goto next_digit;
             const int anchor = cand_cells[ai];
             const int ar = st.topo->cell_row[anchor];
             const int ac = st.topo->cell_col[anchor];
@@ -757,6 +759,8 @@ inline ApplyResult apply_msls_anchor_direct(CandidateState& st) {
             const ApplyResult probe_er = msls_probe_sector_targets(st, cand_cells, cc, cluster, cl, in_cluster, d, probe_steps, probe_budget, sp);
             if (probe_er != ApplyResult::NoProgress) return probe_er;
         }
+next_digit:
+        continue;
     }
 
     return ApplyResult::NoProgress;

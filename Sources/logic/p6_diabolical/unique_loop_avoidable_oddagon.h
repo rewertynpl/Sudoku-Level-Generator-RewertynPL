@@ -53,6 +53,7 @@ inline ApplyResult apply_avoidable_rectangle(CandidateState& st, StrategyStats& 
 
                     auto check_diag = [&](int s1, int s2, int u1, int u2) {
                         if (contradiction) return;
+                        if (st.is_initial_given(s1) || st.is_initial_given(s2)) return;
                         const int v1 = st.board->values[s1];
                         const int v2 = st.board->values[s2];
                         if (v1 == 0 || v2 == 0 || v1 == v2) return;

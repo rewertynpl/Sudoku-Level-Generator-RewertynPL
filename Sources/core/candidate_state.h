@@ -56,6 +56,10 @@ struct CandidateState {
                topo->cell_box[a] == topo->cell_box[b];
     }
 
+    bool is_initial_given(int idx) const {
+        return (board != nullptr) && board->is_initial_given(idx);
+    }
+
     bool place(int idx, int d) {
         if (board->values[idx] != 0) {
             return board->values[idx] == static_cast<uint16_t>(d);

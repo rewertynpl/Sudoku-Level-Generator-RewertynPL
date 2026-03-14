@@ -86,7 +86,7 @@ inline std::string smoke_profile_cli(const StrategySmokeProfile& profile) {
     if (profile.exact_contract_required) {
         out << " --strict-logical";
     }
-    out << " --fast-test";
+    out << (profile.fast_test ? " --fast-test" : " --no-fast-test");
     return out.str();
 }
 

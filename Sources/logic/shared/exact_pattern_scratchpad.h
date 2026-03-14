@@ -168,6 +168,13 @@ struct alignas(64) ExactPatternScratchpad {
     // Struktura zrzutu dla Pattern Overlay Method (DFS fallback P8)
     std::array<PomFrame, MAX_N> pom_stack{};
     int pom_depth = 0;
+    static constexpr int MAX_POM_UNDO = MAX_NN * 64;
+    int pom_undo_idx[MAX_POM_UNDO]{};
+    uint64_t pom_undo_old_mask[MAX_POM_UNDO]{};
+    int pom_undo_count = 0;
+    int pom_place_idx[MAX_NN]{};
+    uint16_t pom_place_digit[MAX_NN]{};
+    int pom_place_count = 0;
 
     // ========================================================================
     // Metody narzędziowe ułatwiające czyszczenie pamięci przed weryfikacją
@@ -203,6 +210,8 @@ struct alignas(64) ExactPatternScratchpad {
     
     void reset_pom() {
         pom_depth = 0;
+        pom_undo_count = 0;
+        pom_place_count = 0;
         for (auto& f : pom_stack) {
             f.cell_idx = -1;
             f.pending_mask = 0ULL;

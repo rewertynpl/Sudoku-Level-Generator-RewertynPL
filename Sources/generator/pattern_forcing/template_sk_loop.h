@@ -54,6 +54,14 @@ public:
         const int b = r1 * n + c2;
         const int c = r2 * n + c1;
         const int d = r2 * n + c2;
+        if (topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(b)] ||
+            topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(c)] ||
+            topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(d)] ||
+            topo.cell_box[static_cast<size_t>(b)] == topo.cell_box[static_cast<size_t>(c)] ||
+            topo.cell_box[static_cast<size_t>(b)] == topo.cell_box[static_cast<size_t>(d)] ||
+            topo.cell_box[static_cast<size_t>(c)] == topo.cell_box[static_cast<size_t>(d)]) {
+            return false;
+        }
 
         // Wybieramy dwie cyfry rdzeniowe (core digits)
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n));

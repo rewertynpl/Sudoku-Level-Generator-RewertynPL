@@ -101,7 +101,7 @@ public:
         plan.explicit_skeleton = true;
 
         // Exocet matematycznie wymaga podziaĹ‚u pudeĹ‚ek na minimum 2x2.
-        if (topo.box_rows <= 1 || topo.box_cols <= 1) {
+        if (topo.box_rows < 2 || topo.box_cols < 2) {
             return false;
         }
 
@@ -159,7 +159,8 @@ public:
         const int c0_target = target_bc * topo.box_cols;
         const int tc1 = c0_target;
         const int tc2 = c0_target + 1;
-        if (tc2 >= n) return false;
+        if (topo.box_cols < 2 || tc2 >= n) return false;
+        if ((tc1 / topo.box_cols) != target_bc || (tc2 / topo.box_cols) != target_bc) return false;
 
         const int target_box = br * topo.box_cols_count + target_bc;
         const int t1 = r1 * n + tc1;

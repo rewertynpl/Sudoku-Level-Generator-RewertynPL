@@ -269,6 +269,7 @@ struct StrategySmokeProfile {
     const char* mcts_profile = "auto";
     bool strict_canonical = true;
     bool allow_proxy_advanced = false;
+    bool fast_test = true;
     uint64_t max_total_time_s = 20;
     uint64_t max_attempts = 0;
     uint64_t min_required_use = 1;
@@ -677,6 +678,40 @@ inline bool strategy_prefers_preserved_core_seed_window(RequiredStrategy require
     }
 }
 
+inline double strategy_large_n_log_scale(int n) {
+    if (n <= 9) {
+        return 0.0;
+    }
+    const double denom = std::log2(64.0 / 9.0);
+    if (denom <= 0.0) {
+        return 0.0;
+    }
+    return std::clamp(std::log2(static_cast<double>(n) / 9.0) / denom, 0.0, 1.0);
+}
+
+inline int scaled_clue_count(int nn, double ratio) {
+    return static_cast<int>(ratio * static_cast<double>(nn));
+}
+
+inline void apply_scaled_clue_window(
+    int n,
+    int nn,
+    int& min_clues,
+    int& max_clues,
+    double base_min_ratio,
+    double base_max_ratio,
+    double ceiling_min_ratio,
+    double ceiling_max_ratio) {
+    const double scale = strategy_large_n_log_scale(n);
+    const double scaled_min_ratio = base_min_ratio + scale * (ceiling_min_ratio - base_min_ratio);
+    const double scaled_max_ratio = base_max_ratio + scale * (ceiling_max_ratio - base_max_ratio);
+    const int scaled_min = scaled_clue_count(nn, scaled_min_ratio);
+    const int scaled_max = scaled_clue_count(nn, scaled_max_ratio);
+    min_clues = std::max(min_clues, scaled_min);
+    max_clues = std::max(max_clues, scaled_max);
+    max_clues = std::clamp(max_clues, min_clues, nn);
+}
+
 inline bool strategy_prefers_sparse_p6_bottleneck_window(RequiredStrategy required) {
     switch (required) {
         case RequiredStrategy::SueDeCoq:
@@ -726,11 +761,10 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     }
 
     if (strategy_prefers_preserved_core_seed_window(required)) {
-        const int preserved_min = static_cast<int>(0.50 * static_cast<double>(nn));
-        const int preserved_max = static_cast<int>(0.65 * static_cast<double>(nn));
-        min_clues = std::max(min_clues, preserved_min);
-        max_clues = std::max(max_clues, preserved_max);
-        max_clues = std::clamp(max_clues, min_clues, nn);
+        apply_scaled_clue_window(
+            n, nn, min_clues, max_clues,
+            0.30, 0.42,
+            0.42, 0.56);
     }
 
     if (strategy_prefers_sparse_p6_bottleneck_window(required)) {
@@ -743,27 +777,24 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     }
 
     if (strategy_prefers_relaxed_theoretical_clue_ceiling(required)) {
-        const int theory_min = static_cast<int>(0.70 * static_cast<double>(nn));
-        const int theory_max = static_cast<int>(0.82 * static_cast<double>(nn));
-        min_clues = std::max(min_clues, theory_min);
-        max_clues = std::max(max_clues, theory_max);
-        max_clues = std::clamp(max_clues, min_clues, nn);
+        apply_scaled_clue_window(
+            n, nn, min_clues, max_clues,
+            0.35, 0.48,
+            0.50, 0.64);
     }
 
     if (strategy_prefers_forcing_family_clue_ceiling(required)) {
-        const int forcing_min = static_cast<int>(0.60 * static_cast<double>(nn));
-        const int forcing_max = static_cast<int>(0.72 * static_cast<double>(nn));
-        min_clues = std::max(min_clues, forcing_min);
-        max_clues = std::max(max_clues, forcing_max);
-        max_clues = std::clamp(max_clues, min_clues, nn);
+        apply_scaled_clue_window(
+            n, nn, min_clues, max_clues,
+            0.28, 0.40,
+            0.40, 0.52);
     }
 
     if (strategy_prefers_loop_overlay_clue_ceiling(required)) {
-        const int loop_min = static_cast<int>(0.65 * static_cast<double>(nn));
-        const int loop_max = static_cast<int>(0.78 * static_cast<double>(nn));
-        min_clues = std::max(min_clues, loop_min);
-        max_clues = std::max(max_clues, loop_max);
-        max_clues = std::clamp(max_clues, min_clues, nn);
+        apply_scaled_clue_window(
+            n, nn, min_clues, max_clues,
+            0.28, 0.40,
+            0.40, 0.52);
     }
 
     return {min_clues, max_clues};
@@ -869,6 +900,7 @@ inline StrategySmokeProfile strategy_smoke_profile(
     profile.mcts_profile = (profile.difficulty >= 8) ? "p8" : ((profile.difficulty >= 7) ? "p7" : "auto");
     profile.strict_canonical = true;
     profile.allow_proxy_advanced = false;
+    profile.fast_test = (profile.difficulty < 8);
     profile.max_total_time_s = strategy_smoke_time_cap_s(rs);
     profile.max_attempts = strategy_smoke_attempt_cap(rs, variant);
     profile.min_required_use = strategy_smoke_min_required_use(rs);

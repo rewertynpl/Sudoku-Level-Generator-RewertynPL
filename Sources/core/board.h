@@ -38,6 +38,7 @@ struct GenericBoard {
     const GenericTopology* topo = nullptr;
 
     std::vector<uint16_t> values;
+    std::vector<uint8_t> initial_givens;
     std::vector<uint64_t> row_used;
     std::vector<uint64_t> col_used;
     std::vector<uint64_t> box_used;
@@ -60,6 +61,7 @@ struct GenericBoard {
     void reset(const GenericTopology& t) {
         topo = &t;
         values.assign(static_cast<size_t>(t.nn), 0);
+        initial_givens.assign(static_cast<size_t>(t.nn), 0U);
         row_used.assign(static_cast<size_t>(t.n), 0ULL);
         col_used.assign(static_cast<size_t>(t.n), 0ULL);
         box_used.assign(static_cast<size_t>(t.n), 0ULL);
@@ -158,6 +160,7 @@ struct GenericBoard {
             if (v == 0) {
                 continue;
             }
+            initial_givens[static_cast<size_t>(idx)] = 1U;
             if (v < 1 || v > topo->n || !place(idx, v)) {
                 if (allow_invalid) {
                     return false;
@@ -166,6 +169,13 @@ struct GenericBoard {
             }
         }
         return true;
+    }
+
+    bool is_initial_given(int idx) const {
+        if (topo == nullptr || idx < 0 || idx >= topo->nn) {
+            return false;
+        }
+        return initial_givens[static_cast<size_t>(idx)] != 0U;
     }
 
     bool init_from_puzzle(const std::vector<uint16_t>& puzzle, bool allow_invalid) {

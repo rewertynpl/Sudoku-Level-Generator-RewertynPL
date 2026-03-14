@@ -378,6 +378,14 @@ inline void protect_exact_template_skeleton(
     RequiredStrategy required_strategy) {
     const bool is_fragile_pattern = pattern_required_is_fragile_candidate_structure(required_strategy);
 
+    if (is_fragile_pattern) {
+        for (int i = 0; i < plan.anchor_count; ++i) {
+            const int idx = plan.anchor_idx[static_cast<size_t>(i)];
+            if (idx < 0 || idx >= sc.prepared_nn) continue;
+            sc.protected_cells[static_cast<size_t>(idx)] = 1;
+        }
+    }
+
     for (int i = 0; i < plan.skeleton_count; ++i) {
         const int idx = plan.skeleton_idx[static_cast<size_t>(i)];
         if (idx < 0 || idx >= sc.prepared_nn) continue;

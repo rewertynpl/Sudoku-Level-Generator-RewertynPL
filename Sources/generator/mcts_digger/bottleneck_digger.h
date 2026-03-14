@@ -1343,6 +1343,9 @@ public:
                     cfg.required_strategy,
                     sc.prior_bonus[static_cast<size_t>(idx)],
                     basic_solved);
+                if (wants_p8 && basic_solved) {
+                    reward -= 10.0;
+                }
                 
                 if (wants_p8 && p8_hits == 0 && required_hits == 0) {
                     reward -= (large_required_geometry ? 0.40 : 1.0) * tuning.p8_miss_penalty;
@@ -1397,11 +1400,9 @@ public:
                     out_puzzle[static_cast<size_t>(idx)] = old_a;
                     if (remove_pair) out_puzzle[static_cast<size_t>(sym_idx)] = old_b;
 
-                    sc.update(idx, reward - (2.0 * required_reward_profile.miss_penalty));
-                    sc.disable(idx);
+                    sc.update(idx, reward - (10.0 * required_reward_profile.miss_penalty));
                     if (remove_pair) {
-                        sc.update(sym_idx, reward - (2.0 * required_reward_profile.miss_penalty));
-                        sc.disable(sym_idx);
+                        sc.update(sym_idx, reward - (10.0 * required_reward_profile.miss_penalty));
                     }
 
                     ++fail_streak;

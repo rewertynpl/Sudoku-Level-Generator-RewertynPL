@@ -40,6 +40,220 @@ inline bool pom_probe_candidate_contradiction(
 
 inline ApplyResult pom_apply_house_overlay_elims(
     CandidateState& st,
+    const uint64_t* inter_cands);
+
+inline void pom_capture_intersection(
+    CandidateState& st,
+    uint64_t* inter_cands);
+
+struct PomUndoMarker {
+    int cand_marker = 0;
+    int place_marker = 0;
+};
+
+inline PomUndoMarker pom_begin_frame(const shared::ExactPatternScratchpad& sp) {
+    return PomUndoMarker{sp.pom_undo_count, sp.pom_place_count};
+}
+
+inline bool pom_push_cand_undo(
+    shared::ExactPatternScratchpad& sp,
+    int idx,
+    uint64_t old_mask) {
+    if (sp.pom_undo_count >= shared::ExactPatternScratchpad::MAX_POM_UNDO) {
+        return false;
+    }
+    sp.pom_undo_idx[static_cast<size_t>(sp.pom_undo_count)] = idx;
+    sp.pom_undo_old_mask[static_cast<size_t>(sp.pom_undo_count)] = old_mask;
+    ++sp.pom_undo_count;
+    return true;
+}
+
+inline bool pom_place_with_undo(
+    CandidateState& st,
+    int idx,
+    int d,
+    shared::ExactPatternScratchpad& sp) {
+    if (st.board->values[idx] != 0) {
+        return st.board->values[idx] == static_cast<uint16_t>(d);
+    }
+
+    const uint64_t bit = (1ULL << (d - 1));
+    if ((st.cands[idx] & bit) == 0ULL) return false;
+    if (!st.board->can_place(idx, d)) return false;
+
+    if (!pom_push_cand_undo(sp, idx, st.cands[idx])) return false;
+    if (sp.pom_place_count >= shared::ExactPatternScratchpad::MAX_NN) return false;
+    st.board->place(idx, d);
+    sp.pom_place_idx[static_cast<size_t>(sp.pom_place_count)] = idx;
+    sp.pom_place_digit[static_cast<size_t>(sp.pom_place_count)] = static_cast<uint16_t>(d);
+    ++sp.pom_place_count;
+    st.cands[idx] = 0ULL;
+
+    const int p0 = st.topo->peer_offsets[idx];
+    const int p1 = st.topo->peer_offsets[idx + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int peer = st.topo->peers_flat[p];
+        if (st.board->values[peer] != 0) continue;
+        uint64_t& pm = st.cands[peer];
+        if ((pm & bit) == 0ULL) continue;
+        if (!pom_push_cand_undo(sp, peer, pm)) return false;
+        pm &= ~bit;
+        if (pm == 0ULL) return false;
+    }
+    return true;
+}
+
+inline bool pom_propagate_singles_with_undo(
+    CandidateState& st,
+    int max_steps,
+    shared::ExactPatternScratchpad& sp) {
+    const int nn = st.topo->nn;
+    for (int step = 0; step < max_steps; ++step) {
+        bool progress = false;
+        for (int idx = 0; idx < nn; ++idx) {
+            if (st.board->values[idx] != 0) continue;
+            const uint64_t mask = st.cands[idx];
+            if (mask == 0ULL) return false;
+            if ((mask & (mask - 1ULL)) != 0ULL) continue;
+            const int d = config::bit_ctz_u64(mask) + 1;
+            if (!pom_place_with_undo(st, idx, d, sp)) return false;
+            progress = true;
+            break;
+        }
+        if (!progress) break;
+    }
+    return true;
+}
+
+inline void pom_rollback_to(
+    CandidateState& st,
+    shared::ExactPatternScratchpad& sp,
+    const PomUndoMarker& marker) {
+    while (sp.pom_place_count > marker.place_marker) {
+        --sp.pom_place_count;
+        const int idx = sp.pom_place_idx[static_cast<size_t>(sp.pom_place_count)];
+        const int d = static_cast<int>(sp.pom_place_digit[static_cast<size_t>(sp.pom_place_count)]);
+        st.board->unplace(idx, d);
+    }
+    while (sp.pom_undo_count > marker.cand_marker) {
+        --sp.pom_undo_count;
+        const int idx = sp.pom_undo_idx[static_cast<size_t>(sp.pom_undo_count)];
+        st.cands[idx] = sp.pom_undo_old_mask[static_cast<size_t>(sp.pom_undo_count)];
+    }
+}
+
+inline int pom_collect_house_digit_cells(
+    CandidateState& st,
+    int house,
+    uint64_t bit,
+    int* out_cells,
+    int cap = 8) {
+    const int p0 = st.topo->house_offsets[static_cast<size_t>(house)];
+    const int p1 = st.topo->house_offsets[static_cast<size_t>(house + 1)];
+    int count = 0;
+    for (int p = p0; p < p1 && count < cap; ++p) {
+        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+        if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) {
+            out_cells[count++] = idx;
+        }
+    }
+    return count;
+}
+
+inline void pom_reset_intersection(uint64_t* inter_cands, int nn) {
+    for (int i = 0; i < nn; ++i) {
+        inter_cands[i] = ~0ULL;
+    }
+}
+
+inline void pom_capture_digit_paths_recursive(
+    CandidateState& st,
+    int d,
+    uint64_t bit,
+    const int* houses,
+    int house_count,
+    int depth,
+    int branch_steps,
+    uint64_t* inter_cands,
+    int& valid_paths,
+    shared::ExactPatternScratchpad& sp) {
+    int branch_cells[8]{};
+    const int branch_count = pom_collect_house_digit_cells(st, houses[depth], bit, branch_cells, 8);
+    if (branch_count < 1 || branch_count > 3) return;
+
+    const PomUndoMarker frame = pom_begin_frame(sp);
+    for (int i = 0; i < branch_count; ++i) {
+        pom_rollback_to(st, sp, frame);
+        if (!pom_place_with_undo(st, branch_cells[i], d, sp)) continue;
+        if (!pom_propagate_singles_with_undo(st, branch_steps, sp)) continue;
+        if (depth + 1 >= house_count) {
+            ++valid_paths;
+            pom_capture_intersection(st, inter_cands);
+        } else {
+            pom_capture_digit_paths_recursive(
+                st, d, bit, houses, house_count, depth + 1, branch_steps, inter_cands, valid_paths, sp);
+        }
+    }
+    pom_rollback_to(st, sp, frame);
+}
+
+inline ApplyResult pom_apply_overlay_probes(
+    CandidateState& st,
+    StrategyStats& s,
+    GenericLogicCertifyResult& r,
+    uint64_t t0,
+    uint64_t* inter_cands,
+    int valid_paths,
+    int probe_steps,
+    int probe_budget_max,
+    shared::ExactPatternScratchpad& sp) {
+    if (valid_paths < 2) return ApplyResult::NoProgress;
+
+    const int nn = st.topo->nn;
+    const ApplyResult house_er = pom_apply_house_overlay_elims(st, inter_cands);
+    if (house_er == ApplyResult::Contradiction) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return house_er;
+    }
+    if (house_er == ApplyResult::Progress) {
+        ++s.hit_count;
+        r.used_pattern_overlay_method = true;
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::Progress;
+    }
+
+    sp.reset_pom();
+    int probe_budget = probe_budget_max;
+    for (int idx = 0; idx < nn && probe_budget > 0; ++idx) {
+        if (st.board->values[idx] != 0) continue;
+        const uint64_t base = st.cands[idx];
+        const uint64_t keep = inter_cands[idx] & base;
+        if (keep == 0ULL) continue;
+        uint64_t rm = base & ~keep;
+        while (rm != 0ULL && probe_budget > 0) {
+            const uint64_t rm_bit = config::bit_lsb(rm);
+            rm = config::bit_clear_lsb_u64(rm);
+            --probe_budget;
+            const int dd = config::bit_ctz_u64(rm_bit) + 1;
+            if (!pom_probe_candidate_contradiction(st, idx, dd, probe_steps, sp)) continue;
+            const ApplyResult er = st.eliminate(idx, rm_bit);
+            if (er == ApplyResult::Contradiction) {
+                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                return er;
+            }
+            if (er == ApplyResult::Progress) {
+                ++s.hit_count;
+                r.used_pattern_overlay_method = true;
+                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                return ApplyResult::Progress;
+            }
+        }
+    }
+    return ApplyResult::NoProgress;
+}
+
+inline ApplyResult pom_apply_house_overlay_elims(
+    CandidateState& st,
     const uint64_t* inter_cands) {
     const int n = st.topo->n;
     const int house_count = static_cast<int>(st.topo->house_offsets.size()) - 1;
@@ -169,37 +383,6 @@ inline ApplyResult apply_pom_global_digit_hexa_family_exact(
     const int probe_budget_max = std::clamp(4 + n / 3, 6, 10);
     int houses[ExactPatternScratchpad::MAX_HOUSES]{};
     int counts[ExactPatternScratchpad::MAX_HOUSES]{};
-    int cells1[8]{}, cells2[8]{}, cells3[8]{}, cells4[8]{}, cells5[8]{}, cells6[8]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level1_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level1_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level2_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level2_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level3_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level3_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level4_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level4_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level5_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level5_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level5_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level5_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level5_box_used[shared::ExactPatternScratchpad::MAX_N]{};
     auto& sp = shared::exact_pattern_scratchpad();
 
     for (int d = 1; d <= n; ++d) {
@@ -214,9 +397,9 @@ inline ApplyResult apply_pom_global_digit_hexa_family_exact(
                 if (st.board->values[idx] != 0) continue;
                 if ((st.cands[idx] & bit) == 0ULL) continue;
                 ++cnt;
-                if (cnt > 3) break;
+                if (cnt > 4) break;
             }
-            if (cnt >= 2 && cnt <= 3) {
+            if (cnt >= 2 && cnt <= 4) {
                 houses[hc] = h;
                 counts[hc] = cnt;
                 ++hc;
@@ -233,18 +416,10 @@ inline ApplyResult apply_pom_global_digit_hexa_family_exact(
                         for (int h5i = h4i + 1; h5i < limit; ++h5i) {
                             for (int h6i = h5i + 1; h6i < limit; ++h6i) {
                                 const int hs[6] = {houses[h1i], houses[h2i], houses[h3i], houses[h4i], houses[h5i], houses[h6i]};
-                                int* cell_sets[6] = {cells1, cells2, cells3, cells4, cells5, cells6};
-                                int counts_local[6] = {};
                                 bool ok = true;
                                 for (int hi = 0; hi < 6; ++hi) {
-                                    const int p0 = st.topo->house_offsets[static_cast<size_t>(hs[hi])];
-                                    const int p1 = st.topo->house_offsets[static_cast<size_t>(hs[hi] + 1)];
-                                    int cc = 0;
-                                    for (int p = p0; p < p1 && cc < 8; ++p) {
-                                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                        if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) cell_sets[hi][cc++] = idx;
-                                    }
-                                    counts_local[hi] = cc;
+                                    int tmp_cells[8]{};
+                                    const int cc = pom_collect_house_digit_cells(st, hs[hi], bit, tmp_cells, 8);
                                     if (cc < 2 || cc > 3) {
                                         ok = false;
                                         break;
@@ -252,209 +427,21 @@ inline ApplyResult apply_pom_global_digit_hexa_family_exact(
                                 }
                                 if (!ok) continue;
 
-                                std::copy_n(st.cands, nn, root_cands);
-                                std::copy_n(st.board->values.data(), nn, root_values);
-                                std::copy_n(st.board->row_used.data(), n, root_row_used);
-                                std::copy_n(st.board->col_used.data(), n, root_col_used);
-                                std::copy_n(st.board->box_used.data(), n, root_box_used);
-                                const int root_empty = st.board->empty_cells;
-
+                                sp.reset_pom();
+                                const PomUndoMarker root_marker = pom_begin_frame(sp);
                                 uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-                                for (int i = 0; i < nn; ++i) inter_cands[i] = ~0ULL;
+                                pom_reset_intersection(inter_cands, nn);
                                 int valid_paths = 0;
+                                pom_capture_digit_paths_recursive(
+                                    st, d, bit, hs, 6, 0, branch_steps, inter_cands, valid_paths, sp);
+                                pom_rollback_to(st, sp, root_marker);
 
-                                for (int a = 0; a < counts_local[0]; ++a) {
-                                    std::copy_n(root_cands, nn, st.cands);
-                                    std::copy_n(root_values, nn, st.board->values.data());
-                                    std::copy_n(root_row_used, n, st.board->row_used.data());
-                                    std::copy_n(root_col_used, n, st.board->col_used.data());
-                                    std::copy_n(root_box_used, n, st.board->box_used.data());
-                                    st.board->empty_cells = root_empty;
-                                    if (!st.place(cells1[a], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                                    std::copy_n(st.cands, nn, level1_cands);
-                                    std::copy_n(st.board->values.data(), nn, level1_values);
-                                    std::copy_n(st.board->row_used.data(), n, level1_row_used);
-                                    std::copy_n(st.board->col_used.data(), n, level1_col_used);
-                                    std::copy_n(st.board->box_used.data(), n, level1_box_used);
-                                    const int level1_empty = st.board->empty_cells;
-
-                                    int branch2_cells[8]{}, branch2_count = 0;
-                                    const int h2p0 = st.topo->house_offsets[static_cast<size_t>(hs[1])];
-                                    const int h2p1 = st.topo->house_offsets[static_cast<size_t>(hs[1] + 1)];
-                                    for (int p = h2p0; p < h2p1 && branch2_count < 8; ++p) {
-                                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                        if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch2_cells[branch2_count++] = idx;
-                                    }
-                                    if (branch2_count < 1 || branch2_count > 3) continue;
-
-                                    for (int b = 0; b < branch2_count; ++b) {
-                                        std::copy_n(level1_cands, nn, st.cands);
-                                        std::copy_n(level1_values, nn, st.board->values.data());
-                                        std::copy_n(level1_row_used, n, st.board->row_used.data());
-                                        std::copy_n(level1_col_used, n, st.board->col_used.data());
-                                        std::copy_n(level1_box_used, n, st.board->box_used.data());
-                                        st.board->empty_cells = level1_empty;
-                                        if (!st.place(branch2_cells[b], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                                        std::copy_n(st.cands, nn, level2_cands);
-                                        std::copy_n(st.board->values.data(), nn, level2_values);
-                                        std::copy_n(st.board->row_used.data(), n, level2_row_used);
-                                        std::copy_n(st.board->col_used.data(), n, level2_col_used);
-                                        std::copy_n(st.board->box_used.data(), n, level2_box_used);
-                                        const int level2_empty = st.board->empty_cells;
-
-                                        int branch3_cells[8]{}, branch3_count = 0;
-                                        const int h3p0 = st.topo->house_offsets[static_cast<size_t>(hs[2])];
-                                        const int h3p1 = st.topo->house_offsets[static_cast<size_t>(hs[2] + 1)];
-                                        for (int p = h3p0; p < h3p1 && branch3_count < 8; ++p) {
-                                            const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                            if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch3_cells[branch3_count++] = idx;
-                                        }
-                                        if (branch3_count < 1 || branch3_count > 3) continue;
-
-                                        for (int c = 0; c < branch3_count; ++c) {
-                                            std::copy_n(level2_cands, nn, st.cands);
-                                            std::copy_n(level2_values, nn, st.board->values.data());
-                                            std::copy_n(level2_row_used, n, st.board->row_used.data());
-                                            std::copy_n(level2_col_used, n, st.board->col_used.data());
-                                            std::copy_n(level2_box_used, n, st.board->box_used.data());
-                                            st.board->empty_cells = level2_empty;
-                                            if (!st.place(branch3_cells[c], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                                            std::copy_n(st.cands, nn, level3_cands);
-                                            std::copy_n(st.board->values.data(), nn, level3_values);
-                                            std::copy_n(st.board->row_used.data(), n, level3_row_used);
-                                            std::copy_n(st.board->col_used.data(), n, level3_col_used);
-                                            std::copy_n(st.board->box_used.data(), n, level3_box_used);
-                                            const int level3_empty = st.board->empty_cells;
-
-                                            int branch4_cells[8]{}, branch4_count = 0;
-                                            const int h4p0 = st.topo->house_offsets[static_cast<size_t>(hs[3])];
-                                            const int h4p1 = st.topo->house_offsets[static_cast<size_t>(hs[3] + 1)];
-                                            for (int p = h4p0; p < h4p1 && branch4_count < 8; ++p) {
-                                                const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                                if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch4_cells[branch4_count++] = idx;
-                                            }
-                                            if (branch4_count < 1 || branch4_count > 3) continue;
-
-                                            for (int e = 0; e < branch4_count; ++e) {
-                                                std::copy_n(level3_cands, nn, st.cands);
-                                                std::copy_n(level3_values, nn, st.board->values.data());
-                                                std::copy_n(level3_row_used, n, st.board->row_used.data());
-                                                std::copy_n(level3_col_used, n, st.board->col_used.data());
-                                                std::copy_n(level3_box_used, n, st.board->box_used.data());
-                                                st.board->empty_cells = level3_empty;
-                                                if (!st.place(branch4_cells[e], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                                                std::copy_n(st.cands, nn, level4_cands);
-                                                std::copy_n(st.board->values.data(), nn, level4_values);
-                                                std::copy_n(st.board->row_used.data(), n, level4_row_used);
-                                                std::copy_n(st.board->col_used.data(), n, level4_col_used);
-                                                std::copy_n(st.board->box_used.data(), n, level4_box_used);
-                                                const int level4_empty = st.board->empty_cells;
-
-                                                int branch5_cells[8]{}, branch5_count = 0;
-                                                const int h5p0 = st.topo->house_offsets[static_cast<size_t>(hs[4])];
-                                                const int h5p1 = st.topo->house_offsets[static_cast<size_t>(hs[4] + 1)];
-                                                for (int p = h5p0; p < h5p1 && branch5_count < 8; ++p) {
-                                                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                                    if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch5_cells[branch5_count++] = idx;
-                                                }
-                                                if (branch5_count < 1 || branch5_count > 3) continue;
-
-                                                for (int f = 0; f < branch5_count; ++f) {
-                                                    std::copy_n(level4_cands, nn, st.cands);
-                                                    std::copy_n(level4_values, nn, st.board->values.data());
-                                                    std::copy_n(level4_row_used, n, st.board->row_used.data());
-                                                    std::copy_n(level4_col_used, n, st.board->col_used.data());
-                                                    std::copy_n(level4_box_used, n, st.board->box_used.data());
-                                                    st.board->empty_cells = level4_empty;
-                                                    if (!st.place(branch5_cells[f], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                                                    std::copy_n(st.cands, nn, level5_cands);
-                                                    std::copy_n(st.board->values.data(), nn, level5_values);
-                                                    std::copy_n(st.board->row_used.data(), n, level5_row_used);
-                                                    std::copy_n(st.board->col_used.data(), n, level5_col_used);
-                                                    std::copy_n(st.board->box_used.data(), n, level5_box_used);
-                                                    const int level5_empty = st.board->empty_cells;
-
-                                                    int branch6_cells[8]{}, branch6_count = 0;
-                                                    const int h6p0 = st.topo->house_offsets[static_cast<size_t>(hs[5])];
-                                                    const int h6p1 = st.topo->house_offsets[static_cast<size_t>(hs[5] + 1)];
-                                                    for (int p = h6p0; p < h6p1 && branch6_count < 8; ++p) {
-                                                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                                                        if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch6_cells[branch6_count++] = idx;
-                                                    }
-                                                    if (branch6_count < 1 || branch6_count > 3) continue;
-
-                                                    for (int g = 0; g < branch6_count; ++g) {
-                                                        std::copy_n(level5_cands, nn, st.cands);
-                                                        std::copy_n(level5_values, nn, st.board->values.data());
-                                                        std::copy_n(level5_row_used, n, st.board->row_used.data());
-                                                        std::copy_n(level5_col_used, n, st.board->col_used.data());
-                                                        std::copy_n(level5_box_used, n, st.board->box_used.data());
-                                                        st.board->empty_cells = level5_empty;
-                                                        if (!st.place(branch6_cells[g], d) || !pom_propagate_singles(st, branch_steps)) continue;
-                                                        ++valid_paths;
-                                                        pom_capture_intersection(st, inter_cands);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                std::copy_n(root_cands, nn, st.cands);
-                                std::copy_n(root_values, nn, st.board->values.data());
-                                std::copy_n(root_row_used, n, st.board->row_used.data());
-                                std::copy_n(root_col_used, n, st.board->col_used.data());
-                                std::copy_n(root_box_used, n, st.board->box_used.data());
-                                st.board->empty_cells = root_empty;
-
-                                if (valid_paths < 2) continue;
-
-                                const ApplyResult house_er = pom_apply_house_overlay_elims(st, inter_cands);
-                                if (house_er == ApplyResult::Contradiction) {
-                                    s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                                    return house_er;
-                                }
-                                if (house_er == ApplyResult::Progress) {
-                                    ++s.hit_count;
-                                    r.used_pattern_overlay_method = true;
-                                    s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                                    return ApplyResult::Progress;
-                                }
-
-                                int probe_budget = probe_budget_max;
-                                for (int idx = 0; idx < nn && probe_budget > 0; ++idx) {
-                                    if (st.board->values[idx] != 0) continue;
-                                    const uint64_t base = st.cands[idx];
-                                    const uint64_t keep = inter_cands[idx] & base;
-                                    if (keep == 0ULL) continue;
-                                    uint64_t rm = base & ~keep;
-                                    while (rm != 0ULL && probe_budget > 0) {
-                                        const uint64_t rm_bit = config::bit_lsb(rm);
-                                        rm = config::bit_clear_lsb_u64(rm);
-                                        --probe_budget;
-                                        const int dd = config::bit_ctz_u64(rm_bit) + 1;
-                                        if (!pom_probe_candidate_contradiction(st, idx, dd, probe_steps, sp)) continue;
-                                        const ApplyResult er = st.eliminate(idx, rm_bit);
-                                        if (er == ApplyResult::Contradiction) {
-                                            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                                            return er;
-                                        }
-                                        if (er == ApplyResult::Progress) {
-                                            ++s.hit_count;
-                                            r.used_pattern_overlay_method = true;
-                                            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                                            return ApplyResult::Progress;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                                const ApplyResult overlay_er = pom_apply_overlay_probes(
+                                    st, s, r, t0, inter_cands, valid_paths, probe_steps, probe_budget_max, sp);
+                                if (overlay_er != ApplyResult::NoProgress) return overlay_er;
+                }
+            }
+        }
                 }
             }
         }
@@ -525,9 +512,9 @@ inline ApplyResult apply_pom_global_digit_penta_family_exact(
                 if (st.board->values[idx] != 0) continue;
                 if ((st.cands[idx] & bit) == 0ULL) continue;
                 ++cnt;
-                if (cnt > 3) break;
+                if (cnt > 4) break;
             }
-            if (cnt >= 2 && cnt <= 3) {
+            if (cnt >= 2 && cnt <= 4) {
                 houses[hc] = h;
                 counts[hc] = cnt;
                 ++hc;
@@ -580,6 +567,23 @@ inline ApplyResult apply_pom_global_digit_penta_family_exact(
                             }
                             if (c1 < 2 || c2 < 2 || c3 < 2 || c4 < 2 || c5 < 2) continue;
                             if (c1 > 3 || c2 > 3 || c3 > 3 || c4 > 3 || c5 > 3) continue;
+
+                            {
+                                const int hs[5] = {h1, h2, h3, h4, h5};
+                                sp.reset_pom();
+                                const PomUndoMarker root_marker = pom_begin_frame(sp);
+                                uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                                pom_reset_intersection(inter_cands_fast, nn);
+                                int valid_paths_fast = 0;
+                                pom_capture_digit_paths_recursive(
+                                    st, d, bit, hs, 5, 0, branch_steps, inter_cands_fast, valid_paths_fast, sp);
+                                pom_rollback_to(st, sp, root_marker);
+
+                                const ApplyResult overlay_er = pom_apply_overlay_probes(
+                                    st, s, r, t0, inter_cands_fast, valid_paths_fast, probe_steps, probe_budget_max, sp);
+                                if (overlay_er != ApplyResult::NoProgress) return overlay_er;
+                                continue;
+                            }
 
                             std::copy_n(st.cands, nn, root_cands);
                             std::copy_n(st.board->values.data(), nn, root_values);
@@ -818,9 +822,9 @@ inline ApplyResult apply_pom_global_digit_quad_family_exact(
                 if (st.board->values[idx] != 0) continue;
                 if ((st.cands[idx] & bit) == 0ULL) continue;
                 ++cnt;
-                if (cnt > 3) break;
+                if (cnt > 4) break;
             }
-            if (cnt >= 2 && cnt <= 3) {
+            if (cnt >= 2 && cnt <= 4) {
                 houses[hc] = h;
                 counts[hc] = cnt;
                 ++hc;
@@ -864,7 +868,24 @@ inline ApplyResult apply_pom_global_digit_quad_family_exact(
                             if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) cells4[c4++] = idx;
                         }
                         if (c1 < 2 || c2 < 2 || c3 < 2 || c4 < 2) continue;
-                        if (c1 > 3 || c2 > 3 || c3 > 3 || c4 > 3) continue;
+                        if (c1 > 4 || c2 > 4 || c3 > 4 || c4 > 4) continue;
+
+                        {
+                            const int hs[4] = {h1, h2, h3, h4};
+                            sp.reset_pom();
+                            const PomUndoMarker root_marker = pom_begin_frame(sp);
+                            uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                            pom_reset_intersection(inter_cands_fast, nn);
+                            int valid_paths_fast = 0;
+                            pom_capture_digit_paths_recursive(
+                                st, d, bit, hs, 4, 0, branch_steps, inter_cands_fast, valid_paths_fast, sp);
+                            pom_rollback_to(st, sp, root_marker);
+
+                            const ApplyResult overlay_er = pom_apply_overlay_probes(
+                                st, s, r, t0, inter_cands_fast, valid_paths_fast, probe_steps, probe_budget_max, sp);
+                            if (overlay_er != ApplyResult::NoProgress) return overlay_er;
+                            continue;
+                        }
 
                         std::copy_n(st.cands, nn, root_cands);
                         std::copy_n(st.board->values.data(), nn, root_values);
@@ -1072,9 +1093,9 @@ inline ApplyResult apply_pom_global_digit_family_exact(
                 if (st.board->values[idx] != 0) continue;
                 if ((st.cands[idx] & bit) == 0ULL) continue;
                 ++cnt;
-                if (cnt > 3) break;
+                if (cnt > 4) break;
             }
-            if (cnt >= 2 && cnt <= 3) {
+            if (cnt >= 2 && cnt <= 4) {
                 houses[hc] = h;
                 counts[hc] = cnt;
                 ++hc;
@@ -1109,7 +1130,24 @@ inline ApplyResult apply_pom_global_digit_family_exact(
                         const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
                         if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) cells3[c3++] = idx;
                     }
-                    if (c1 < 2 || c2 < 2 || c3 < 2 || c1 > 3 || c2 > 3 || c3 > 3) continue;
+                    if (c1 < 2 || c2 < 2 || c3 < 2 || c1 > 4 || c2 > 4 || c3 > 4) continue;
+
+                    {
+                        const int hs[3] = {h1, h2, h3};
+                        sp.reset_pom();
+                        const PomUndoMarker root_marker = pom_begin_frame(sp);
+                        uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                        pom_reset_intersection(inter_cands_fast, nn);
+                        int valid_paths_fast = 0;
+                        pom_capture_digit_paths_recursive(
+                            st, d, bit, hs, 3, 0, branch_steps, inter_cands_fast, valid_paths_fast, sp);
+                        pom_rollback_to(st, sp, root_marker);
+
+                        const ApplyResult overlay_er = pom_apply_overlay_probes(
+                            st, s, r, t0, inter_cands_fast, valid_paths_fast, probe_steps, probe_budget_max, sp);
+                        if (overlay_er != ApplyResult::NoProgress) return overlay_er;
+                        continue;
+                    }
 
                     std::copy_n(st.cands, nn, root_cands);
                     std::copy_n(st.board->values.data(), nn, root_values);
@@ -1261,18 +1299,6 @@ inline ApplyResult apply_pom_digit_pair_family_exact(
     const int probe_budget_max = std::clamp(4 + n / 3, 6, 14);
     int houses[ExactPatternScratchpad::MAX_HOUSES]{};
     int counts[ExactPatternScratchpad::MAX_HOUSES]{};
-    int house1_cells[8]{};
-    int house2_cells[8]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t branch_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t branch_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_box_used[shared::ExactPatternScratchpad::MAX_N]{};
     auto& sp = shared::exact_pattern_scratchpad();
 
     for (int d = 1; d <= n; ++d) {
@@ -1287,9 +1313,9 @@ inline ApplyResult apply_pom_digit_pair_family_exact(
                 if (st.board->values[idx] != 0) continue;
                 if ((st.cands[idx] & bit) == 0ULL) continue;
                 ++cnt;
-                if (cnt > 3) break;
+                if (cnt > 4) break;
             }
-            if (cnt >= 2 && cnt <= 3) {
+            if (cnt >= 2 && cnt <= 4) {
                 houses[hc] = h;
                 counts[hc] = cnt;
                 ++hc;
@@ -1303,118 +1329,30 @@ inline ApplyResult apply_pom_digit_pair_family_exact(
             for (int hj = hi + 1; hj < limit; ++hj) {
                 const int h1 = houses[hi];
                 const int h2 = houses[hj];
-                int c1 = 0;
-                int c2 = 0;
-                const int p10 = st.topo->house_offsets[static_cast<size_t>(h1)];
-                const int p11 = st.topo->house_offsets[static_cast<size_t>(h1 + 1)];
-                const int p20 = st.topo->house_offsets[static_cast<size_t>(h2)];
-                const int p21 = st.topo->house_offsets[static_cast<size_t>(h2 + 1)];
-                for (int p = p10; p < p11 && c1 < 8; ++p) {
-                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                    if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) house1_cells[c1++] = idx;
+                const int hs[2] = {h1, h2};
+                bool ok = true;
+                for (int hk = 0; hk < 2; ++hk) {
+                    int tmp_cells[8]{};
+                    const int cc = pom_collect_house_digit_cells(st, hs[hk], bit, tmp_cells, 8);
+                    if (cc < 2 || cc > 4) {
+                        ok = false;
+                        break;
+                    }
                 }
-                for (int p = p20; p < p21 && c2 < 8; ++p) {
-                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                    if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) house2_cells[c2++] = idx;
-                }
-                if (c1 < 2 || c2 < 2 || c1 > 3 || c2 > 3) continue;
+                if (!ok) continue;
 
-                std::copy_n(st.cands, nn, root_cands);
-                std::copy_n(st.board->values.data(), nn, root_values);
-                std::copy_n(st.board->row_used.data(), n, root_row_used);
-                std::copy_n(st.board->col_used.data(), n, root_col_used);
-                std::copy_n(st.board->box_used.data(), n, root_box_used);
-                const int root_empty = st.board->empty_cells;
-
+                sp.reset_pom();
+                const PomUndoMarker root_marker = pom_begin_frame(sp);
                 uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-                for (int i = 0; i < nn; ++i) inter_cands[i] = ~0ULL;
+                pom_reset_intersection(inter_cands, nn);
                 int valid_pairs = 0;
+                pom_capture_digit_paths_recursive(
+                    st, d, bit, hs, 2, 0, branch_steps, inter_cands, valid_pairs, sp);
+                pom_rollback_to(st, sp, root_marker);
 
-                for (int i = 0; i < c1; ++i) {
-                    std::copy_n(root_cands, nn, st.cands);
-                    std::copy_n(root_values, nn, st.board->values.data());
-                    std::copy_n(root_row_used, n, st.board->row_used.data());
-                    std::copy_n(root_col_used, n, st.board->col_used.data());
-                    std::copy_n(root_box_used, n, st.board->box_used.data());
-                    st.board->empty_cells = root_empty;
-
-                    if (!st.place(house1_cells[i], d) || !pom_propagate_singles(st, branch_steps)) continue;
-
-                    std::copy_n(st.cands, nn, branch_cands);
-                    std::copy_n(st.board->values.data(), nn, branch_values);
-                    std::copy_n(st.board->row_used.data(), n, branch_row_used);
-                    std::copy_n(st.board->col_used.data(), n, branch_col_used);
-                    std::copy_n(st.board->box_used.data(), n, branch_box_used);
-                    const int branch_empty = st.board->empty_cells;
-
-                    int branch_count = 0;
-                    int branch_cells[8]{};
-                    for (int p = p20; p < p21 && branch_count < 8; ++p) {
-                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                        if (st.board->values[idx] == 0 && (st.cands[idx] & bit) != 0ULL) branch_cells[branch_count++] = idx;
-                    }
-                    if (branch_count < 1 || branch_count > 3) continue;
-
-                    for (int j = 0; j < branch_count; ++j) {
-                        std::copy_n(branch_cands, nn, st.cands);
-                        std::copy_n(branch_values, nn, st.board->values.data());
-                        std::copy_n(branch_row_used, n, st.board->row_used.data());
-                        std::copy_n(branch_col_used, n, st.board->col_used.data());
-                        std::copy_n(branch_box_used, n, st.board->box_used.data());
-                        st.board->empty_cells = branch_empty;
-                        if (!st.place(branch_cells[j], d) || !pom_propagate_singles(st, branch_steps)) continue;
-                        ++valid_pairs;
-                        pom_capture_intersection(st, inter_cands);
-                    }
-                }
-
-                std::copy_n(root_cands, nn, st.cands);
-                std::copy_n(root_values, nn, st.board->values.data());
-                std::copy_n(root_row_used, n, st.board->row_used.data());
-                std::copy_n(root_col_used, n, st.board->col_used.data());
-                std::copy_n(root_box_used, n, st.board->box_used.data());
-                st.board->empty_cells = root_empty;
-
-                if (valid_pairs < 2) continue;
-
-                const ApplyResult house_er = pom_apply_house_overlay_elims(st, inter_cands);
-                if (house_er == ApplyResult::Contradiction) {
-                    s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                    return house_er;
-                }
-                if (house_er == ApplyResult::Progress) {
-                    ++s.hit_count;
-                    r.used_pattern_overlay_method = true;
-                    s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                    return ApplyResult::Progress;
-                }
-
-                int probe_budget = probe_budget_max;
-                for (int idx = 0; idx < nn && probe_budget > 0; ++idx) {
-                    if (st.board->values[idx] != 0) continue;
-                    const uint64_t base = st.cands[idx];
-                    const uint64_t keep = inter_cands[idx] & base;
-                    if (keep == 0ULL) continue;
-                    uint64_t rm = base & ~keep;
-                    while (rm != 0ULL && probe_budget > 0) {
-                        const uint64_t rm_bit = config::bit_lsb(rm);
-                        rm = config::bit_clear_lsb_u64(rm);
-                        --probe_budget;
-                        const int dd = config::bit_ctz_u64(rm_bit) + 1;
-                        if (!pom_probe_candidate_contradiction(st, idx, dd, probe_steps, sp)) continue;
-                        const ApplyResult er = st.eliminate(idx, rm_bit);
-                        if (er == ApplyResult::Contradiction) {
-                            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                            return er;
-                        }
-                        if (er == ApplyResult::Progress) {
-                            ++s.hit_count;
-                            r.used_pattern_overlay_method = true;
-                            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-                            return ApplyResult::Progress;
-                        }
-                    }
-                }
+                const ApplyResult overlay_er = pom_apply_overlay_probes(
+                    st, s, r, t0, inter_cands, valid_pairs, probe_steps, probe_budget_max, sp);
+                if (overlay_er != ApplyResult::NoProgress) return overlay_er;
             }
         }
     }
