@@ -4,6 +4,8 @@
 // Description: 3D Medusa-oriented chain coloring pass focused on boards with
 // rich bivalue structure (zero-allocation).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -27,6 +29,29 @@ inline int medusa_find_node_for_digit(
     if (sp.medusa_node_bit[base_node] == bit) return base_node;
     if (sp.medusa_node_bit[base_node + 1] == bit) return base_node + 1;
     return -1;
+}
+
+inline int medusa_find_node(
+    const shared::ExactPatternScratchpad& sp,
+    int cell,
+    uint64_t bit) {
+    for (int i = 0; i < sp.medusa_node_count; ++i) {
+        if (sp.medusa_node_cell[i] == cell && sp.medusa_node_bit[i] == bit) return i;
+    }
+    return -1;
+}
+
+inline int medusa_get_or_add_node(
+    shared::ExactPatternScratchpad& sp,
+    int cell,
+    uint64_t bit) {
+    const int existing = medusa_find_node(sp, cell, bit);
+    if (existing >= 0) return existing;
+    if (sp.medusa_node_count >= shared::ExactPatternScratchpad::MAX_MEDUSA_NODES) return -1;
+    const int node = sp.medusa_node_count++;
+    sp.medusa_node_cell[node] = cell;
+    sp.medusa_node_bit[node] = bit;
+    return node;
 }
 
 inline void medusa_add_edge(shared::ExactPatternScratchpad& sp, int u, int v) {
@@ -54,22 +79,20 @@ inline bool build_medusa_bivalue_graph(CandidateState& st, shared::ExactPatternS
         if (st.board->values[idx] != 0) continue;
         uint64_t mask = st.cands[idx];
         if (std::popcount(mask) != 2) continue;
-        if (sp.medusa_node_count + 1 >= shared::ExactPatternScratchpad::MAX_MEDUSA_NODES) break;
-
-        const int base = sp.medusa_node_count;
-        sp.cell_to_node[idx] = base;
-        sp.medusa_node_cell[base] = idx;
-        sp.medusa_node_bit[base] = config::bit_lsb(mask);
-        mask &= ~sp.medusa_node_bit[base];
-        sp.medusa_node_cell[base + 1] = idx;
-        sp.medusa_node_bit[base + 1] = mask;
-        sp.medusa_node_count += 2;
+        const uint64_t b1 = config::bit_lsb(mask);
+        mask &= ~b1;
+        const uint64_t b2 = mask;
+        const int n1 = medusa_get_or_add_node(sp, idx, b1);
+        const int n2 = medusa_get_or_add_node(sp, idx, b2);
+        if (n1 < 0 || n2 < 0) break;
+        sp.cell_to_node[idx] = std::min(n1, n2);
         ++bivalue_count;
-        medusa_add_edge(sp, base, base + 1);
+        medusa_add_edge(sp, n1, n2);
     }
-    if (bivalue_count < 3 || bivalue_count > 256) return false;
+    const int bivalue_cap = std::min(1536, std::max(256, n * 32));
+    if (bivalue_count < 3 || bivalue_count > bivalue_cap) return false;
 
-    int house_nodes[64]{};
+    int house_cells[64]{};
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
         const int house_count = static_cast<int>(st.topo->house_offsets.size()) - 1;
@@ -79,14 +102,15 @@ inline bool build_medusa_bivalue_graph(CandidateState& st, shared::ExactPatternS
             int cnt = 0;
             for (int p = p0; p < p1; ++p) {
                 const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-                const int base = sp.cell_to_node[idx];
-                if (base < 0) continue;
-                const int node = medusa_find_node_for_digit(sp, base, bit);
-                if (node < 0) continue;
-                if (cnt < 64) house_nodes[cnt++] = node;
+                if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                if (cnt < 64) house_cells[cnt++] = idx;
                 if (cnt > 2) break;
             }
-            if (cnt == 2) medusa_add_edge(sp, house_nodes[0], house_nodes[1]);
+            if (cnt == 2) {
+                const int u = medusa_get_or_add_node(sp, house_cells[0], bit);
+                const int v = medusa_get_or_add_node(sp, house_cells[1], bit);
+                if (u >= 0 && v >= 0) medusa_add_edge(sp, u, v);
+            }
         }
     }
 
@@ -130,6 +154,48 @@ inline ApplyResult medusa_eliminate_color(
     return ApplyResult::NoProgress;
 }
 
+inline ApplyResult medusa_eliminate_other_bits_in_cell(
+    CandidateState& st,
+    int cell,
+    uint64_t keep_bit) {
+    uint64_t drop = st.cands[cell] & ~keep_bit;
+    while (drop != 0ULL) {
+        const uint64_t bit = config::bit_lsb(drop);
+        drop = config::bit_clear_lsb_u64(drop);
+        const ApplyResult er = st.eliminate(cell, bit);
+        if (er != ApplyResult::NoProgress) return er;
+    }
+    return ApplyResult::NoProgress;
+}
+
+inline bool medusa_candidate_conflicts(
+    const CandidateState& st,
+    const shared::ExactPatternScratchpad& sp,
+    int node,
+    int cell,
+    uint64_t bit) {
+    const int src = sp.medusa_node_cell[node];
+    const uint64_t src_bit = sp.medusa_node_bit[node];
+    if (src == cell) return src_bit != bit;
+    return src_bit == bit && st.is_peer(cell, src);
+}
+
+inline bool medusa_candidate_conflicts_with_color(
+    const CandidateState& st,
+    const shared::ExactPatternScratchpad& sp,
+    const int* component_nodes,
+    int comp_size,
+    int color,
+    int cell,
+    uint64_t bit) {
+    for (int i = 0; i < comp_size; ++i) {
+        const int node = component_nodes[i];
+        if (sp.medusa_color[node] != color) continue;
+        if (medusa_candidate_conflicts(st, sp, node, cell, bit)) return true;
+    }
+    return false;
+}
+
 inline ApplyResult medusa_component_pass(
     CandidateState& st,
     shared::ExactPatternScratchpad& sp,
@@ -149,7 +215,9 @@ inline ApplyResult medusa_component_pass(
             const int v = sp.medusa_adj[p];
             if (sp.medusa_color[v] == 0) {
                 sp.medusa_color[v] = -sp.medusa_color[u];
-                sp.bfs_queue[qt++] = v;
+                if (qt < shared::ExactPatternScratchpad::MAX_BFS) {
+                    sp.bfs_queue[qt++] = v;
+                }
             }
         }
     }
@@ -172,6 +240,190 @@ inline ApplyResult medusa_component_pass(
     }
 
     const int nn = st.topo->nn;
+    for (int color : {1, -1}) {
+        for (int idx = 0; idx < nn; ++idx) {
+            if (st.board->values[idx] != 0) continue;
+            uint64_t m = st.cands[idx];
+            if (std::popcount(m) <= 1) continue;
+
+            bool any_conflict = false;
+            bool all_conflict = true;
+            while (m != 0ULL) {
+                const uint64_t bit = config::bit_lsb(m);
+                m = config::bit_clear_lsb_u64(m);
+                const bool conflict = medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, color, idx, bit);
+                any_conflict = any_conflict || conflict;
+                if (!conflict) {
+                    all_conflict = false;
+                    break;
+                }
+            }
+            if (any_conflict && all_conflict) {
+                return medusa_eliminate_color(st, sp, color);
+            }
+        }
+
+        const int house_count = static_cast<int>(st.topo->house_offsets.size()) - 1;
+        for (int h = 0; h < house_count; ++h) {
+            const int p0 = st.topo->house_offsets[static_cast<size_t>(h)];
+            const int p1 = st.topo->house_offsets[static_cast<size_t>(h + 1)];
+            for (int d = 1; d <= st.topo->n; ++d) {
+                const uint64_t bit = (1ULL << (d - 1));
+                bool any_place = false;
+                bool all_conflict = true;
+                for (int p = p0; p < p1; ++p) {
+                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                    if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                    any_place = true;
+                    if (!medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, color, idx, bit)) {
+                        all_conflict = false;
+                        break;
+                    }
+                }
+                if (any_place && all_conflict) {
+                    return medusa_eliminate_color(st, sp, color);
+                }
+            }
+        }
+    }
+
+    for (int idx = 0; idx < nn; ++idx) {
+        if (st.board->values[idx] != 0) continue;
+        uint64_t cell_mask = st.cands[idx];
+        if (std::popcount(cell_mask) <= 1) continue;
+
+        bool has_pos = false;
+        bool has_neg = false;
+        uint64_t pos_bits = 0ULL;
+        uint64_t neg_bits = 0ULL;
+        for (int i = 0; i < comp_size; ++i) {
+            const int node = sp.bfs_parent[i];
+            if (sp.medusa_node_cell[node] != idx) continue;
+            if (sp.medusa_color[node] > 0) {
+                has_pos = true;
+                pos_bits |= sp.medusa_node_bit[node];
+            } else if (sp.medusa_color[node] < 0) {
+                has_neg = true;
+                neg_bits |= sp.medusa_node_bit[node];
+            }
+        }
+
+        if (has_pos) {
+            uint64_t other = cell_mask & ~pos_bits;
+            bool all_see_neg = (other != 0ULL);
+            while (other != 0ULL) {
+                const uint64_t bit = config::bit_lsb(other);
+                other = config::bit_clear_lsb_u64(other);
+                if (!medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, -1, idx, bit)) {
+                    all_see_neg = false;
+                    break;
+                }
+            }
+            if (all_see_neg) {
+                if (std::popcount(pos_bits) == 1) {
+                    const uint64_t keep = pos_bits;
+                    return medusa_eliminate_other_bits_in_cell(st, idx, keep);
+                }
+            }
+        }
+
+        if (has_neg) {
+            uint64_t other = cell_mask & ~neg_bits;
+            bool all_see_pos = (other != 0ULL);
+            while (other != 0ULL) {
+                const uint64_t bit = config::bit_lsb(other);
+                other = config::bit_clear_lsb_u64(other);
+                if (!medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, 1, idx, bit)) {
+                    all_see_pos = false;
+                    break;
+                }
+            }
+            if (all_see_pos) {
+                if (std::popcount(neg_bits) == 1) {
+                    const uint64_t keep = neg_bits;
+                    return medusa_eliminate_other_bits_in_cell(st, idx, keep);
+                }
+            }
+        }
+    }
+
+    const int house_count = static_cast<int>(st.topo->house_offsets.size()) - 1;
+    for (int h = 0; h < house_count; ++h) {
+        const int p0 = st.topo->house_offsets[static_cast<size_t>(h)];
+        const int p1 = st.topo->house_offsets[static_cast<size_t>(h + 1)];
+        for (int d = 1; d <= st.topo->n; ++d) {
+            const uint64_t bit = (1ULL << (d - 1));
+            int colored_pos = -1;
+            int colored_neg = -1;
+            int colored_pos_count = 0;
+            int colored_neg_count = 0;
+            int place_count = 0;
+
+            for (int p = p0; p < p1; ++p) {
+                const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                ++place_count;
+                for (int i = 0; i < comp_size; ++i) {
+                    const int node = sp.bfs_parent[i];
+                    if (sp.medusa_node_cell[node] != idx || sp.medusa_node_bit[node] != bit) continue;
+                    if (sp.medusa_color[node] > 0) {
+                        if (colored_pos != idx) {
+                            colored_pos = idx;
+                            ++colored_pos_count;
+                        }
+                    }
+                    if (sp.medusa_color[node] < 0) {
+                        if (colored_neg != idx) {
+                            colored_neg = idx;
+                            ++colored_neg_count;
+                        }
+                    }
+                }
+            }
+            if (place_count <= 1) continue;
+
+            if (colored_pos_count == 1 && colored_pos >= 0) {
+                bool forces_pos = true;
+                for (int p = p0; p < p1; ++p) {
+                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                    if (idx == colored_pos || st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                    if (!medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, -1, idx, bit)) {
+                        forces_pos = false;
+                        break;
+                    }
+                }
+                if (forces_pos) {
+                    for (int p = p0; p < p1; ++p) {
+                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                        if (idx == colored_pos || st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                        const ApplyResult er = st.eliminate(idx, bit);
+                        if (er != ApplyResult::NoProgress) return er;
+                    }
+                }
+            }
+
+            if (colored_neg_count == 1 && colored_neg >= 0) {
+                bool forces_neg = true;
+                for (int p = p0; p < p1; ++p) {
+                    const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                    if (idx == colored_neg || st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                    if (!medusa_candidate_conflicts_with_color(st, sp, sp.bfs_parent, comp_size, 1, idx, bit)) {
+                        forces_neg = false;
+                        break;
+                    }
+                }
+                if (forces_neg) {
+                    for (int p = p0; p < p1; ++p) {
+                        const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
+                        if (idx == colored_neg || st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) continue;
+                        const ApplyResult er = st.eliminate(idx, bit);
+                        if (er != ApplyResult::NoProgress) return er;
+                    }
+                }
+            }
+        }
+    }
+
     for (int idx = 0; idx < nn; ++idx) {
         if (st.board->values[idx] != 0) continue;
         uint64_t m = st.cands[idx];
@@ -182,9 +434,7 @@ inline ApplyResult medusa_component_pass(
             bool sees_neg = false;
             for (int i = 0; i < comp_size; ++i) {
                 const int node = sp.bfs_parent[i];
-                if (sp.medusa_node_bit[node] != bit) continue;
-                const int src = sp.medusa_node_cell[node];
-                if (src == idx || !st.is_peer(idx, src)) continue;
+                if (!medusa_candidate_conflicts(st, sp, node, idx, bit)) continue;
                 sees_pos = sees_pos || (sp.medusa_color[node] > 0);
                 sees_neg = sees_neg || (sp.medusa_color[node] < 0);
                 if (sees_pos && sees_neg) {
@@ -203,7 +453,8 @@ inline ApplyResult apply_medusa_3d(CandidateState& st, StrategyStats& s, Generic
 
     const int nn = st.topo->nn;
     const int n = st.topo->n;
-    if (n > 32 || st.board->empty_cells > (nn - 2 * n)) {
+    const int min_givens = std::max(4, n / 2);
+    if (n > 64 || st.board->empty_cells > (nn - min_givens)) {
         s.elapsed_ns += get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }

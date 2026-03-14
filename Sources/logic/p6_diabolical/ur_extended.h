@@ -5,6 +5,8 @@
 //       oraz Hidden Unique Rectangle. Chroni przed Deadly Pattern.
 //       Zero-allocation dziÄ™ki zaawansowanemu maskowaniu 64-bitowemu.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

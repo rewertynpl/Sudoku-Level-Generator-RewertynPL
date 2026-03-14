@@ -4,9 +4,12 @@
 // Description: Direct mixed fish detector with both orientations:
 // row+box bases vs column covers and col+box bases vs row covers.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 
@@ -14,6 +17,48 @@
 #include "../logic_result.h"
 
 namespace sudoku_hpc::logic::p7_nightmare {
+
+inline int mixed_fish_active_cap(const CandidateState& st, int fish_size) {
+    const int n = st.topo->n;
+    if (fish_size <= 3) {
+        if (n <= 16) return std::min(2 * n, 48);
+        if (n <= 25) return 40;
+        return 32;
+    }
+    if (n <= 16) return std::min(2 * n, 56);
+    if (n <= 25) return 44;
+    return 36;
+}
+
+inline int mixed_fish_combo_cap(const CandidateState& st, int fish_size) {
+    const int n = st.topo->n;
+    if (fish_size <= 3) {
+        if (n <= 16) return 14000;
+        if (n <= 25) return 9000;
+        return 5000;
+    }
+    if (n <= 16) return 18000;
+    if (n <= 25) return 10000;
+    return 6000;
+}
+
+inline void reorder_sparse_first(int* ids, uint64_t* masks, int count) {
+    for (int i = 1; i < count; ++i) {
+        const int id = ids[i];
+        const uint64_t mask = masks[i];
+        const int weight = std::popcount(mask);
+        int j = i - 1;
+        while (j >= 0) {
+            const int prev_weight = std::popcount(masks[j]);
+            if (prev_weight <= weight) break;
+            ids[j + 1] = ids[j];
+            masks[j + 1] = masks[j];
+            --j;
+        }
+        ids[j + 1] = id;
+        masks[j + 1] = mask;
+    }
+}
 
 inline bool cell_in_mixed_base(
     const CandidateState& st,
@@ -45,6 +90,7 @@ inline bool build_line_box_base_masks(
     const int n = st.topo->n;
     const uint64_t bit = 1ULL << (digit - 1);
     out_count = 0;
+    const int active_cap = mixed_fish_active_cap(st, fish_size);
 
     // Line houses as bases (rows or cols).
     for (int line = 0; line < n; ++line) {
@@ -57,7 +103,7 @@ inline bool build_line_box_base_masks(
             cover_mask |= (1ULL << cover);
         }
         const int pc = std::popcount(cover_mask);
-        if (pc >= 2 && pc <= fish_size) {
+        if (pc >= 2 && pc <= fish_size && out_count < active_cap) {
             out_ids[out_count] = line;
             out_masks[out_count] = cover_mask;
             ++out_count;
@@ -78,13 +124,14 @@ inline bool build_line_box_base_masks(
             cover_mask |= (1ULL << cover);
         }
         const int pc = std::popcount(cover_mask);
-        if (pc >= 2 && pc <= fish_size) {
+        if (pc >= 2 && pc <= fish_size && out_count < active_cap) {
             out_ids[out_count] = n + b;
             out_masks[out_count] = cover_mask;
             ++out_count;
         }
     }
 
+    reorder_sparse_first(out_ids, out_masks, out_count);
     return out_count >= fish_size;
 }
 
@@ -103,6 +150,8 @@ inline ApplyResult apply_mixed_row_box_vs_col_fish(
     int base_ids[128]{};
     uint64_t base_masks[128]{};
     int selected[4]{};
+    int combo_checks = 0;
+    const int combo_cap = mixed_fish_combo_cap(st, fish_size);
 
     for (int d = 1; d <= n; ++d) {
         int base_count = 0;
@@ -110,6 +159,7 @@ inline ApplyResult apply_mixed_row_box_vs_col_fish(
             continue;
         }
         const uint64_t d_bit = 1ULL << (d - 1);
+        combo_checks = 0;
 
         for (int i0 = 0; i0 < base_count; ++i0) {
             selected[0] = i0;
@@ -124,6 +174,7 @@ inline ApplyResult apply_mixed_row_box_vs_col_fish(
                     const int i3_start = (fish_size >= 4) ? (i2 + 1) : i2_end;
                     const int i3_end = (fish_size >= 4) ? base_count : (i2 + 1);
                     for (int i3 = i3_start; i3 < i3_end; ++i3) {
+                        if (++combo_checks > combo_cap) break;
                         if (fish_size >= 4) selected[3] = i3;
 
                         uint64_t cover_cols = 0ULL;
@@ -156,8 +207,11 @@ inline ApplyResult apply_mixed_row_box_vs_col_fish(
                             }
                         }
                     }
+                    if (combo_checks > combo_cap) break;
                 }
+                if (combo_checks > combo_cap) break;
             }
+            if (combo_checks > combo_cap) break;
         }
     }
 

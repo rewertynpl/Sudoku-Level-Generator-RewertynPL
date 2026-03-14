@@ -4,6 +4,8 @@
 // Opis: Ultraszybki generator pełnych plansz z wykorzystaniem wektoryzacji 
 //       SIMD (AVX2/AVX512) i heurystyki MRV. Zero-allocation (CandidateCache).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -87,7 +89,7 @@ public:
         std::vector<uint16_t>& out_solution,
         SearchAbortControl* budget = nullptr) const {
         
-        static thread_local GenericBoard board;
+        GenericBoard& board = generic_tls_board();
         board.reset(topo);
         
         if (!fill(board, rng, budget)) {
@@ -134,9 +136,9 @@ private:
     };
 
     static CandidateCache& candidate_cache_for(const GenericTopology& topo) {
-        static thread_local CandidateCache cache;
-        cache.ensure(topo);
-        return cache;
+        static thread_local CandidateCache* cache = new CandidateCache();
+        cache->ensure(topo);
+        return *cache;
     }
 
     static SUDOKU_HOT_INLINE void cache_set_candidate(

@@ -5,6 +5,8 @@
 //       Zoptymalizowana w C++20 poprzez użycie std::atomic::wait/notify.
 //       Rozwiązany problem "missed wake-up".
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

@@ -4,6 +4,8 @@
 // Opis: Algorytm wyboru (Selection) oparty na UCB1 oraz dynamiczne
 //       profile strojenia nagród (Advanced Tuning Profile).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -47,6 +49,7 @@ inline bool mcts_is_level7_strategy(RequiredStrategy rs) {
     case RequiredStrategy::GroupedXCycle:
     case RequiredStrategy::ContinuousNiceLoop:
     case RequiredStrategy::ALSXYWing:
+    case RequiredStrategy::ALSXZ:
     case RequiredStrategy::ALSChain:
     case RequiredStrategy::SueDeCoq:
     case RequiredStrategy::DeathBlossom:

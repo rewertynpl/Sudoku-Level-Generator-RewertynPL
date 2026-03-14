@@ -14,12 +14,14 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "../config/run_config.h"
 #include "../core/board.h"
 #include "../core/candidate_state.h"
 #include "../generator/core_engines/dlx_solver.h" // dla SearchAbortControl
+#include "../generator/pattern_forcing/pattern_planter.h"
 #include "logic_result.h"
 
 // ============================================================================
@@ -136,71 +138,267 @@ struct GenericLogicCertify {
         bool supports_asymmetric = true;
         uint8_t max_n_verified = 64;
         const char* proof_tag = "none";
+        StrategyCoverageGrade coverage_grade = StrategyCoverageGrade::TextbookFull;
+        PatternGeneratorPolicy generator_policy = PatternGeneratorPolicy::Unsupported;
+        StrategyZeroAllocGrade zero_alloc_grade = StrategyZeroAllocGrade::HotpathZeroAllocOk;
+        StrategyAuditDecision audit_decision = StrategyAuditDecision::Keep;
+        bool asymmetry_verified = false;
     };
+
+    struct StrategyAuditRow {
+        size_t slot = 0;
+        RequiredStrategy required_strategy = RequiredStrategy::None;
+        const char* id = "unknown";
+        uint8_t level = 0;
+        StrategyImplTier impl_tier = StrategyImplTier::Disabled;
+        bool supports_asymmetric = false;
+        bool asymmetry_verified = false;
+        uint8_t max_n_verified = 0;
+        const char* proof_tag = "none";
+        StrategyCoverageGrade coverage_grade = StrategyCoverageGrade::Untested;
+        PatternGeneratorPolicy generator_policy = PatternGeneratorPolicy::Unsupported;
+        StrategyZeroAllocGrade zero_alloc_grade = StrategyZeroAllocGrade::NeedsScratchpadRefactor;
+        StrategyAuditDecision audit_decision = StrategyAuditDecision::Rewrite;
+        bool parser_selectable = false;
+        bool certifier_wired = false;
+        bool mcts_dispatch_wired = false;
+        bool generator_dispatch_wired = false;
+        bool generator_exact_template_wired = false;
+        bool generator_family_fallback_wired = false;
+        bool smoke_profile_present = false;
+        bool asymmetric_smoke_profile_present = false;
+        bool canonical_full = false;
+        bool proxy_or_disabled = true;
+        bool family_fallback_only = false;
+        bool exact_required_but_missing = false;
+        bool exact_contract_required = false;
+    };
+
+    struct StrategyAuditSummary {
+        size_t total_slots = 0;
+        size_t canonical_full = 0;
+        size_t proxy_or_disabled = 0;
+        size_t asymmetry_verified = 0;
+        size_t textbook_full = 0;
+        size_t family_approx = 0;
+        size_t partial = 0;
+        size_t wired_only = 0;
+        size_t untested = 0;
+        size_t exact_required = 0;
+        size_t exact_preferred_fallback_family = 0;
+        size_t family_only = 0;
+        size_t unsupported = 0;
+        size_t hotpath_zero_alloc_ok = 0;
+        size_t tls_alloc_only = 0;
+        size_t vector_in_hotpath = 0;
+        size_t needs_scratchpad_refactor = 0;
+        size_t keep = 0;
+        size_t tighten = 0;
+        size_t rewrite = 0;
+        size_t exact_template_missing = 0;
+        size_t parser_selectable = 0;
+        size_t certifier_wired = 0;
+        size_t mcts_dispatch_wired = 0;
+        size_t generator_dispatch_wired = 0;
+        size_t generator_exact_template_wired = 0;
+        size_t generator_family_fallback_wired = 0;
+        size_t smoke_profile_present = 0;
+        size_t asymmetric_smoke_profile_present = 0;
+        size_t family_fallback_only = 0;
+        size_t exact_required_but_missing = 0;
+        size_t rewrite_candidates = 0;
+        size_t tighten_candidates = 0;
+    };
+
+    static constexpr size_t strategy_slot_count() {
+        return kStrategySlotCount;
+    }
 
     static const StrategyMeta& strategy_meta_for_slot(size_t slot) {
         static constexpr std::array<StrategyMeta, kStrategySlotCount> kMeta = {{
-            {"NakedSingle", 1, StrategyImplTier::Full, true, 64, "P1.NakedSingle"},
-            {"HiddenSingle", 1, StrategyImplTier::Full, true, 64, "P1.HiddenSingle"},
-            {"PointingPairs", 2, StrategyImplTier::Full, true, 64, "P2.PointingPairs"},
-            {"BoxLineReduction", 2, StrategyImplTier::Full, true, 64, "P2.BoxLineReduction"},
-            {"NakedPair", 2, StrategyImplTier::Full, true, 64, "P2.NakedPair"},
-            {"HiddenPair", 2, StrategyImplTier::Full, true, 64, "P2.HiddenPair"},
-            {"NakedTriple", 2, StrategyImplTier::Full, true, 64, "P2.NakedTriple"},
-            {"HiddenTriple", 2, StrategyImplTier::Full, true, 64, "P2.HiddenTriple"},
-            {"NakedQuad", 4, StrategyImplTier::Full, true, 64, "P3.NakedQuad"},
-            {"HiddenQuad", 4, StrategyImplTier::Full, true, 64, "P3.HiddenQuad"},
-            {"XWing", 4, StrategyImplTier::Full, true, 64, "P3.XWing"},
-            {"YWing", 4, StrategyImplTier::Full, true, 64, "P3.YWing"},
-            {"Skyscraper", 4, StrategyImplTier::Full, true, 64, "P3.Skyscraper"},
-            {"TwoStringKite", 4, StrategyImplTier::Full, true, 64, "P3.TwoStringKite"},
-            {"EmptyRectangle", 4, StrategyImplTier::Full, true, 64, "P3.EmptyRectangle"},
-            {"RemotePairs", 4, StrategyImplTier::Full, true, 64, "P3.RemotePairs"},
-            {"Swordfish", 5, StrategyImplTier::Full, true, 64, "P4.Swordfish"},
-            {"FinnedXWingSashimi", 5, StrategyImplTier::Full, true, 64, "P4.FinnedXWingSashimi"},
-            {"SimpleColoring", 5, StrategyImplTier::Full, true, 64, "P4.SimpleColoring"},
-            {"BUGPlusOne", 5, StrategyImplTier::Full, true, 64, "P4.BUGPlusOne"},
-            {"UniqueRectangle", 5, StrategyImplTier::Full, true, 64, "P4.UniqueRectangle"},
-            {"XYZWing", 5, StrategyImplTier::Full, true, 64, "P4.XYZWing"},
-            {"WWing", 5, StrategyImplTier::Full, true, 64, "P4.WWing"},
-            {"Jellyfish", 6, StrategyImplTier::Full, true, 64, "P5.Jellyfish"},
-            {"XChain", 6, StrategyImplTier::Full, true, 64, "P5.XChain"},
-            {"XYChain", 6, StrategyImplTier::Full, true, 64, "P5.XYChain"},
-            {"WXYZWing", 6, StrategyImplTier::Full, true, 64, "P5.WXYZWing"},
-            {"FinnedSwordfishJellyfish", 6, StrategyImplTier::Full, true, 64, "P5.FinnedSwordfishJellyfish"},
-            {"ALSXZ", 6, StrategyImplTier::Full, true, 64, "P5.ALSXZ"},
-            {"UniqueLoop", 6, StrategyImplTier::Full, true, 64, "P5.UniqueLoop"},
-            {"AvoidableRectangle", 6, StrategyImplTier::Full, true, 64, "P5.AvoidableRectangle"},
-            {"BivalueOddagon", 6, StrategyImplTier::Full, true, 64, "P5.BivalueOddagon"},
-            {"Medusa3D", 7, StrategyImplTier::Hybrid, true, 64, "P6.Medusa3D"},
-            {"AIC", 7, StrategyImplTier::Full, true, 64, "P6.AIC"},
-            {"GroupedAIC", 7, StrategyImplTier::Full, true, 64, "P6.GroupedAIC"},
-            {"GroupedXCycle", 7, StrategyImplTier::Full, true, 64, "P6.GroupedXCycle"},
-            {"ContinuousNiceLoop", 7, StrategyImplTier::Full, true, 64, "P6.ContinuousNiceLoop"},
-            {"ALSXYWing", 7, StrategyImplTier::Hybrid, true, 64, "P6.ALSXYWing"},
-            {"ALSChain", 7, StrategyImplTier::Hybrid, true, 64, "P6.ALSChain"},
-            {"SueDeCoq", 7, StrategyImplTier::Hybrid, true, 64, "P6.SueDeCoq"},
-            {"DeathBlossom", 7, StrategyImplTier::Hybrid, true, 64, "P6.DeathBlossom"},
-            {"FrankenFish", 7, StrategyImplTier::Full, true, 64, "P6.FrankenFish"},
-            {"MutantFish", 7, StrategyImplTier::Full, true, 64, "P6.MutantFish"},
-            {"KrakenFish", 7, StrategyImplTier::Hybrid, true, 64, "P6.KrakenFish"},
-            {"MSLS", 8, StrategyImplTier::Hybrid, true, 64, "P7.MSLS"},
-            {"Exocet", 8, StrategyImplTier::Hybrid, true, 64, "P7.Exocet"},
-            {"SeniorExocet", 8, StrategyImplTier::Hybrid, true, 64, "P7.SeniorExocet"},
-            {"SKLoop", 8, StrategyImplTier::Hybrid, true, 64, "P7.SKLoop"},
-            {"PatternOverlayMethod", 8, StrategyImplTier::Hybrid, true, 64, "P7.PatternOverlay"},
-            {"ForcingChains", 8, StrategyImplTier::Hybrid, true, 64, "P7.ForcingChains"},
-            {"Squirmbag", 7, StrategyImplTier::Hybrid, true, 64, "P6.Squirmbag"},
-            {"URExtended", 6, StrategyImplTier::Full, true, 64, "P5.URExtended"},
-            {"HiddenUR", 6, StrategyImplTier::Full, true, 64, "P5.HiddenUR"},
-            {"BUGType2", 6, StrategyImplTier::Full, true, 64, "P5.BUGType2"},
-            {"BUGType3", 6, StrategyImplTier::Full, true, 64, "P5.BUGType3"},
-            {"BUGType4", 6, StrategyImplTier::Full, true, 64, "P5.BUGType4"},
-            {"BorescoperQiuDeadlyPattern", 6, StrategyImplTier::Full, true, 64, "P5.BorescoperQiu"},
-            {"AlignedPairExclusion", 7, StrategyImplTier::Hybrid, true, 64, "P6.AlignedPairExclusion"},
-            {"AlignedTripleExclusion", 7, StrategyImplTier::Hybrid, true, 64, "P6.AlignedTripleExclusion"},
-            {"ALSAIC", 7, StrategyImplTier::Hybrid, true, 64, "P6.ALSAIC"},
-            {"DynamicForcingChains", 8, StrategyImplTier::Hybrid, true, 64, "P7.DynamicForcingChains"},
+            {"NakedSingle", 1, StrategyImplTier::Full, true, 64, "P1.NakedSingle",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"HiddenSingle", 1, StrategyImplTier::Full, true, 64, "P1.HiddenSingle",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"PointingPairs", 2, StrategyImplTier::Full, true, 64, "P2.PointingPairs",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BoxLineReduction", 2, StrategyImplTier::Full, true, 64, "P2.BoxLineReduction",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"NakedPair", 2, StrategyImplTier::Full, true, 64, "P2.NakedPair",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"HiddenPair", 2, StrategyImplTier::Full, true, 64, "P2.HiddenPair",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"NakedTriple", 2, StrategyImplTier::Full, true, 64, "P2.NakedTriple",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"HiddenTriple", 2, StrategyImplTier::Full, true, 64, "P2.HiddenTriple",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"NakedQuad", 4, StrategyImplTier::Full, true, 64, "P3.NakedQuad",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"HiddenQuad", 4, StrategyImplTier::Full, true, 64, "P3.HiddenQuad",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"XWing", 4, StrategyImplTier::Full, true, 64, "P3.XWing",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"YWing", 4, StrategyImplTier::Full, true, 64, "P3.YWing",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"Skyscraper", 4, StrategyImplTier::Full, true, 64, "P3.Skyscraper",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"TwoStringKite", 4, StrategyImplTier::Full, true, 64, "P3.TwoStringKite",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"EmptyRectangle", 4, StrategyImplTier::Full, true, 64, "P3.EmptyRectangle",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"RemotePairs", 4, StrategyImplTier::Full, true, 64, "P3.RemotePairs",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"Swordfish", 5, StrategyImplTier::Full, true, 64, "P4.Swordfish",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"FinnedXWingSashimi", 5, StrategyImplTier::Full, true, 64, "P4.FinnedXWingSashimi",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"SimpleColoring", 5, StrategyImplTier::Full, true, 64, "P4.SimpleColoring",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BUGPlusOne", 5, StrategyImplTier::Full, true, 64, "P4.BUGPlusOne",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"UniqueRectangle", 5, StrategyImplTier::Full, true, 64, "P4.UniqueRectangle",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"XYZWing", 5, StrategyImplTier::Full, true, 64, "P4.XYZWing",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"WWing", 5, StrategyImplTier::Full, true, 64, "P4.WWing",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"Jellyfish", 6, StrategyImplTier::Full, true, 64, "P5.Jellyfish",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"XChain", 6, StrategyImplTier::Full, true, 64, "P5.XChain",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"XYChain", 6, StrategyImplTier::Full, true, 64, "P5.XYChain",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"WXYZWing", 6, StrategyImplTier::Full, true, 64, "P5.WXYZWing",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"FinnedSwordfishJellyfish", 6, StrategyImplTier::Full, true, 64, "P5.FinnedSwordfishJellyfish",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ALSXZ", 6, StrategyImplTier::Full, true, 64, "P5.ALSXZ",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"UniqueLoop", 6, StrategyImplTier::Full, true, 64, "P5.UniqueLoop",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"AvoidableRectangle", 6, StrategyImplTier::Full, true, 64, "P5.AvoidableRectangle",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BivalueOddagon", 6, StrategyImplTier::Full, true, 64, "P5.BivalueOddagon",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"Medusa3D", 7, StrategyImplTier::Full, true, 64, "P6.Medusa3D",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"AIC", 7, StrategyImplTier::Full, true, 64, "P6.AIC",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"GroupedAIC", 7, StrategyImplTier::Full, true, 64, "P6.GroupedAIC",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"GroupedXCycle", 7, StrategyImplTier::Full, true, 64, "P6.GroupedXCycle",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ContinuousNiceLoop", 7, StrategyImplTier::Full, true, 64, "P6.ContinuousNiceLoop",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ALSXYWing", 7, StrategyImplTier::Full, true, 64, "P6.ALSXYWing",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ALSChain", 7, StrategyImplTier::Full, true, 64, "P6.ALSChain",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"SueDeCoq", 7, StrategyImplTier::Full, true, 64, "P6.SueDeCoq",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"DeathBlossom", 7, StrategyImplTier::Full, true, 64, "P6.DeathBlossom",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"FrankenFish", 7, StrategyImplTier::Full, true, 64, "P6.FrankenFish",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"MutantFish", 7, StrategyImplTier::Full, true, 64, "P6.MutantFish",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"KrakenFish", 7, StrategyImplTier::Full, true, 64, "P6.KrakenFish",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"MSLS", 8, StrategyImplTier::Full, true, 64, "P7.MSLS",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"Exocet", 8, StrategyImplTier::Full, true, 64, "P7.Exocet",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"SeniorExocet", 8, StrategyImplTier::Full, true, 64, "P7.SeniorExocet",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"SKLoop", 8, StrategyImplTier::Full, true, 64, "P7.SKLoop",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"PatternOverlayMethod", 8, StrategyImplTier::Full, true, 64, "P7.PatternOverlay",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ForcingChains", 8, StrategyImplTier::Full, true, 64, "P7.ForcingChains",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"Squirmbag", 7, StrategyImplTier::Full, true, 64, "P6.Squirmbag",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"URExtended", 6, StrategyImplTier::Full, true, 64, "P5.URExtended",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"HiddenUR", 6, StrategyImplTier::Full, true, 64, "P5.HiddenUR",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BUGType2", 6, StrategyImplTier::Full, true, 64, "P5.BUGType2",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BUGType3", 6, StrategyImplTier::Full, true, 64, "P5.BUGType3",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BUGType4", 6, StrategyImplTier::Full, true, 64, "P5.BUGType4",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"BorescoperQiuDeadlyPattern", 6, StrategyImplTier::Full, true, 64, "P5.BorescoperQiu",
+                StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
+            {"AlignedPairExclusion", 7, StrategyImplTier::Full, true, 64, "P6.AlignedPairExclusion",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"AlignedTripleExclusion", 7, StrategyImplTier::Full, true, 64, "P6.AlignedTripleExclusion",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"ALSAIC", 7, StrategyImplTier::Full, true, 64, "P6.ALSAIC",
+                StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
+            {"DynamicForcingChains", 8, StrategyImplTier::Full, true, 64, "P7.DynamicForcingChains",
+                StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
+                StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
         }};
         if (slot >= kMeta.size()) {
             static constexpr StrategyMeta kInvalid{"invalid", 0, StrategyImplTier::Disabled, false, 0, "invalid"};
@@ -213,13 +411,203 @@ struct GenericLogicCertify {
         return strategy_meta_for_slot(slot).impl_tier;
     }
 
+    static RequiredStrategy required_strategy_for_slot(size_t slot) {
+        static constexpr std::array<RequiredStrategy, kStrategySlotCount> kRequired = {{
+            RequiredStrategy::NakedSingle,
+            RequiredStrategy::HiddenSingle,
+            RequiredStrategy::PointingPairs,
+            RequiredStrategy::BoxLineReduction,
+            RequiredStrategy::NakedPair,
+            RequiredStrategy::HiddenPair,
+            RequiredStrategy::NakedTriple,
+            RequiredStrategy::HiddenTriple,
+            RequiredStrategy::NakedQuad,
+            RequiredStrategy::HiddenQuad,
+            RequiredStrategy::XWing,
+            RequiredStrategy::YWing,
+            RequiredStrategy::Skyscraper,
+            RequiredStrategy::TwoStringKite,
+            RequiredStrategy::EmptyRectangle,
+            RequiredStrategy::RemotePairs,
+            RequiredStrategy::Swordfish,
+            RequiredStrategy::FinnedXWingSashimi,
+            RequiredStrategy::SimpleColoring,
+            RequiredStrategy::BUGPlusOne,
+            RequiredStrategy::UniqueRectangle,
+            RequiredStrategy::XYZWing,
+            RequiredStrategy::WWing,
+            RequiredStrategy::Jellyfish,
+            RequiredStrategy::XChain,
+            RequiredStrategy::XYChain,
+            RequiredStrategy::WXYZWing,
+            RequiredStrategy::FinnedSwordfishJellyfish,
+            RequiredStrategy::ALSXZ,
+            RequiredStrategy::UniqueLoop,
+            RequiredStrategy::AvoidableRectangle,
+            RequiredStrategy::BivalueOddagon,
+            RequiredStrategy::Medusa3D,
+            RequiredStrategy::AIC,
+            RequiredStrategy::GroupedAIC,
+            RequiredStrategy::GroupedXCycle,
+            RequiredStrategy::ContinuousNiceLoop,
+            RequiredStrategy::ALSXYWing,
+            RequiredStrategy::ALSChain,
+            RequiredStrategy::SueDeCoq,
+            RequiredStrategy::DeathBlossom,
+            RequiredStrategy::FrankenFish,
+            RequiredStrategy::MutantFish,
+            RequiredStrategy::KrakenFish,
+            RequiredStrategy::MSLS,
+            RequiredStrategy::Exocet,
+            RequiredStrategy::SeniorExocet,
+            RequiredStrategy::SKLoop,
+            RequiredStrategy::PatternOverlayMethod,
+            RequiredStrategy::ForcingChains,
+            RequiredStrategy::Squirmbag,
+            RequiredStrategy::UniqueRectangleExtended,
+            RequiredStrategy::HiddenUniqueRectangle,
+            RequiredStrategy::BUGType2,
+            RequiredStrategy::BUGType3,
+            RequiredStrategy::BUGType4,
+            RequiredStrategy::BorescoperQiuDeadlyPattern,
+            RequiredStrategy::AlignedPairExclusion,
+            RequiredStrategy::AlignedTripleExclusion,
+            RequiredStrategy::ALSAIC,
+            RequiredStrategy::DynamicForcingChains,
+        }};
+        if (slot >= kRequired.size()) {
+            return RequiredStrategy::None;
+        }
+        return kRequired[slot];
+    }
+
     static bool is_proxy_slot(size_t slot) {
         const StrategyImplTier tier = strategy_impl_tier_for_slot(slot);
         return tier == StrategyImplTier::Proxy || tier == StrategyImplTier::Disabled;
     }
 
     static bool is_full_canonical_slot(size_t slot) {
-        return strategy_impl_tier_for_slot(slot) == StrategyImplTier::Full;
+        const StrategyMeta& meta = strategy_meta_for_slot(slot);
+        return meta.impl_tier == StrategyImplTier::Full &&
+               meta.coverage_grade == StrategyCoverageGrade::TextbookFull &&
+               meta.zero_alloc_grade == StrategyZeroAllocGrade::HotpathZeroAllocOk;
+    }
+
+    static StrategyAuditRow strategy_audit_row_for_slot(size_t slot) {
+        const StrategyMeta& meta = strategy_meta_for_slot(slot);
+        StrategyAuditRow row{};
+        size_t mapped_slot = 0;
+        RequiredStrategy parsed = RequiredStrategy::None;
+        row.slot = slot;
+        row.required_strategy = required_strategy_for_slot(slot);
+        row.id = meta.id;
+        row.level = meta.level;
+        row.impl_tier = meta.impl_tier;
+        row.supports_asymmetric = meta.supports_asymmetric;
+        row.asymmetry_verified = meta.asymmetry_verified;
+        row.max_n_verified = meta.max_n_verified;
+        row.proof_tag = meta.proof_tag;
+        row.coverage_grade = meta.coverage_grade;
+        row.generator_policy = meta.generator_policy;
+        row.zero_alloc_grade = meta.zero_alloc_grade;
+        row.audit_decision = meta.audit_decision;
+        row.canonical_full = is_full_canonical_slot(slot);
+        row.proxy_or_disabled = is_proxy_slot(slot);
+        row.exact_contract_required = (meta.generator_policy == PatternGeneratorPolicy::ExactRequired);
+        row.parser_selectable =
+            parse_required_strategy(to_string(row.required_strategy), parsed) &&
+            parsed == row.required_strategy;
+        const StrategySmokeProfile primary_smoke = primary_strategy_smoke_profile(row.required_strategy);
+        const StrategySmokeProfile asymmetric_smoke = asymmetric_strategy_smoke_profile(row.required_strategy);
+        if (row.parser_selectable && primary_smoke.enabled) {
+            row.parser_selectable = required_strategy_selectable_for_geometry(
+                row.required_strategy, primary_smoke.box_rows, primary_smoke.box_cols);
+        }
+        row.certifier_wired =
+            slot_from_required_strategy(row.required_strategy, mapped_slot) && mapped_slot == slot;
+        row.mcts_dispatch_wired = row.certifier_wired && row.required_strategy != RequiredStrategy::None;
+        row.generator_dispatch_wired =
+            pattern_forcing::pattern_dispatch_wired(row.required_strategy, meta.level);
+        row.generator_exact_template_wired =
+            pattern_forcing::pattern_exact_template_dispatch_wired(row.required_strategy, meta.level);
+        row.generator_family_fallback_wired =
+            pattern_forcing::pattern_family_fallback_dispatch_wired(row.required_strategy, meta.level);
+        row.smoke_profile_present = primary_smoke.enabled;
+        row.asymmetric_smoke_profile_present = row.supports_asymmetric && asymmetric_smoke.enabled;
+        row.family_fallback_only =
+            row.generator_family_fallback_wired && !row.generator_exact_template_wired;
+        row.exact_required_but_missing =
+            row.exact_contract_required && !row.generator_exact_template_wired;
+        return row;
+    }
+
+    static bool strategy_audit_row_from_required_strategy(RequiredStrategy rs, StrategyAuditRow& out_row) {
+        size_t slot = 0;
+        if (!slot_from_required_strategy(rs, slot)) {
+            return false;
+        }
+        out_row = strategy_audit_row_for_slot(slot);
+        return true;
+    }
+
+    template <typename Fn>
+    static void for_each_strategy_audit_row(Fn&& fn) {
+        for (size_t slot = 0; slot < kStrategySlotCount; ++slot) {
+            fn(strategy_audit_row_for_slot(slot));
+        }
+    }
+
+    static StrategyAuditSummary build_audit_summary() {
+        StrategyAuditSummary summary{};
+        summary.total_slots = kStrategySlotCount;
+        for_each_strategy_audit_row([&summary](const StrategyAuditRow& row) {
+            if (row.canonical_full) ++summary.canonical_full;
+            if (row.proxy_or_disabled) ++summary.proxy_or_disabled;
+            if (row.asymmetry_verified) ++summary.asymmetry_verified;
+
+            switch (row.coverage_grade) {
+                case StrategyCoverageGrade::TextbookFull: ++summary.textbook_full; break;
+                case StrategyCoverageGrade::FamilyApprox: ++summary.family_approx; break;
+                case StrategyCoverageGrade::Partial: ++summary.partial; break;
+                case StrategyCoverageGrade::WiredOnly: ++summary.wired_only; break;
+                case StrategyCoverageGrade::Untested: ++summary.untested; break;
+            }
+
+            switch (row.generator_policy) {
+                case PatternGeneratorPolicy::ExactRequired: ++summary.exact_required; break;
+                case PatternGeneratorPolicy::ExactPreferredFamilyFallback: ++summary.exact_preferred_fallback_family; break;
+                case PatternGeneratorPolicy::FamilyOnly: ++summary.family_only; break;
+                case PatternGeneratorPolicy::Unsupported: ++summary.unsupported; break;
+            }
+
+            switch (row.zero_alloc_grade) {
+                case StrategyZeroAllocGrade::HotpathZeroAllocOk: ++summary.hotpath_zero_alloc_ok; break;
+                case StrategyZeroAllocGrade::TlsAllocOnly: ++summary.tls_alloc_only; break;
+                case StrategyZeroAllocGrade::VectorInHotpath: ++summary.vector_in_hotpath; break;
+                case StrategyZeroAllocGrade::NeedsScratchpadRefactor: ++summary.needs_scratchpad_refactor; break;
+            }
+
+            switch (row.audit_decision) {
+                case StrategyAuditDecision::Keep: ++summary.keep; break;
+                case StrategyAuditDecision::Tighten: ++summary.tighten; break;
+                case StrategyAuditDecision::Rewrite: ++summary.rewrite; break;
+                case StrategyAuditDecision::ExactTemplateMissing: ++summary.exact_template_missing; break;
+            }
+
+            if (row.parser_selectable) ++summary.parser_selectable;
+            if (row.certifier_wired) ++summary.certifier_wired;
+            if (row.mcts_dispatch_wired) ++summary.mcts_dispatch_wired;
+            if (row.generator_dispatch_wired) ++summary.generator_dispatch_wired;
+            if (row.generator_exact_template_wired) ++summary.generator_exact_template_wired;
+            if (row.generator_family_fallback_wired) ++summary.generator_family_fallback_wired;
+            if (row.smoke_profile_present) ++summary.smoke_profile_present;
+            if (row.asymmetric_smoke_profile_present) ++summary.asymmetric_smoke_profile_present;
+            if (row.family_fallback_only) ++summary.family_fallback_only;
+            if (row.exact_required_but_missing) ++summary.exact_required_but_missing;
+            if (row.audit_decision == StrategyAuditDecision::Rewrite) ++summary.rewrite_candidates;
+            if (row.audit_decision == StrategyAuditDecision::Tighten) ++summary.tighten_candidates;
+        });
+        return summary;
     }
 
     static bool slot_from_required_strategy(RequiredStrategy rs, size_t& out_slot) {
@@ -494,15 +882,23 @@ private:
 
 public:
     GenericLogicCertifyResult certify(
-        const std::vector<uint16_t>& puzzle,
+        std::span<const uint16_t> puzzle,
         const GenericTopology& topo,
         core_engines::SearchAbortControl* budget = nullptr,
         bool capture_solution_grid = false) const {
         return certify_up_to_level(puzzle, topo, 8, budget, capture_solution_grid);
     }
 
-    GenericLogicCertifyResult certify_up_to_level(
+    GenericLogicCertifyResult certify(
         const std::vector<uint16_t>& puzzle,
+        const GenericTopology& topo,
+        core_engines::SearchAbortControl* budget = nullptr,
+        bool capture_solution_grid = false) const {
+        return certify(std::span<const uint16_t>(puzzle.data(), puzzle.size()), topo, budget, capture_solution_grid);
+    }
+
+    GenericLogicCertifyResult certify_up_to_level(
+        std::span<const uint16_t> puzzle,
         const GenericTopology& topo,
         int max_level,
         core_engines::SearchAbortControl* budget = nullptr,
@@ -513,7 +909,7 @@ public:
         const int level_limit = std::clamp(max_level, 1, 8);
 
         // Bufor dla planszy (zero-alloc miÄ™dzy wykonaniami poszczegĂłlnych komĂłrek)
-        static thread_local GenericBoard board;
+        GenericBoard& board = generic_tls_board();
         board.topo = &topo;
         if (!board.init_from_puzzle(puzzle, false)) return result;
 
@@ -551,6 +947,20 @@ public:
         result.hidden_single_scanned = result.strategy_stats[SlotHiddenSingle].use_count > 0;
         
         return result;
+    }
+
+    GenericLogicCertifyResult certify_up_to_level(
+        const std::vector<uint16_t>& puzzle,
+        const GenericTopology& topo,
+        int max_level,
+        core_engines::SearchAbortControl* budget = nullptr,
+        bool capture_solution_grid = false) const {
+        return certify_up_to_level(
+            std::span<const uint16_t>(puzzle.data(), puzzle.size()),
+            topo,
+            max_level,
+            budget,
+            capture_solution_grid);
     }
 };
 

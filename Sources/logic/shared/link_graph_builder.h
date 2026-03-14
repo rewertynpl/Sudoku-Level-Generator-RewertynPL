@@ -5,6 +5,8 @@
 //       komórkami w relacjach typu "Strong" oraz "Weak" per konkretna cyfra.
 //       Kluczowe dla metod X-Cycles i Forcing Chains.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

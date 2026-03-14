@@ -5,6 +5,8 @@
 //       Płaskie bufory Thread-Local dla wszystkich grafów, kolejek i tablic.
 //       Rozmiary stałe dostosowane pod N=64. Unikamy false-sharingu cache.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

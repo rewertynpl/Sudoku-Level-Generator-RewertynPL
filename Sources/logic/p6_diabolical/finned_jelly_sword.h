@@ -4,6 +4,8 @@
 // Description: Jellyfish and direct finned Swordfish/Jellyfish passes,
 // zero-allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -19,6 +21,20 @@
 #include "../p4_hard/fish_basic.h"
 
 namespace sudoku_hpc::logic::p6_diabolical {
+
+inline int finned_fish_combo_cap(int n, int fish_size) {
+    if (fish_size == 3) {
+        return std::clamp(9000 + n * 320, 10000, 26000);
+    }
+    return std::clamp(6500 + n * 220, 7000, 18000);
+}
+
+inline int finned_fish_line_cap(int n, int fish_size) {
+    if (fish_size == 3) {
+        return std::clamp(18 + n / 2, 20, 36);
+    }
+    return std::clamp(16 + n / 3, 20, 32);
+}
 
 inline ApplyResult apply_jellyfish(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = st.now_ns();
@@ -151,7 +167,8 @@ inline ApplyResult apply_finned_fish_direct(
     uint64_t line_masks[64]{};
     int line_count = 0;
     int combo_checks = 0;
-    const int combo_cap = (fish_size == 3) ? 10000 : 7000;
+    const int combo_cap = finned_fish_combo_cap(n, fish_size);
+    const int line_cap = finned_fish_line_cap(n, fish_size);
 
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
@@ -176,7 +193,7 @@ inline ApplyResult apply_finned_fish_direct(
         }
 
         if (line_count < fish_size) continue;
-        if (line_count > 20) continue;
+        if (line_count > line_cap) continue;
 
         for (int i0 = 0; i0 < line_count; ++i0) {
             for (int i1 = i0 + 1; i1 < line_count; ++i1) {
@@ -304,7 +321,7 @@ inline ApplyResult apply_finned_swordfish_jellyfish(CandidateState& st, Strategy
     const int nn = st.topo->nn;
 
     // Heavy direct finned-fish scan only in later board phase.
-    if (st.board->empty_cells <= (nn - 4 * n)) {
+    if (st.board->empty_cells <= (nn - 4 * n) || n >= 16) {
         ApplyResult ar = apply_finned_fish_direct(st, 3, true, progress, s, t0);
         if (ar == ApplyResult::Contradiction) return ar;
         ar = apply_finned_fish_direct(st, 3, false, progress, s, t0);

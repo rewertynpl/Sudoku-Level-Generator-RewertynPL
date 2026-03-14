@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿//Author copyright Marcin Matysek (Rewertyn)
+#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -36,6 +37,95 @@ inline void accumulate_reject_reason(GenerateRunResult& r, RejectReason reason, 
     }
 }
 
+inline void accumulate_reject_reason_atomic(
+    RejectReason reason,
+    bool timed_out,
+    std::atomic<uint64_t>& rejected,
+    std::atomic<uint64_t>& reject_prefilter,
+    std::atomic<uint64_t>& reject_logic,
+    std::atomic<uint64_t>& reject_uniqueness,
+    std::atomic<uint64_t>& reject_strategy,
+    std::atomic<uint64_t>& reject_replay,
+    std::atomic<uint64_t>& reject_distribution_bias,
+    std::atomic<uint64_t>& reject_uniqueness_budget) {
+    rejected.fetch_add(1, std::memory_order_relaxed);
+    if (timed_out) {
+        reject_uniqueness_budget.fetch_add(1, std::memory_order_relaxed);
+    }
+    switch (reason) {
+        case RejectReason::Prefilter: reject_prefilter.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::Logic: reject_logic.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::Uniqueness: reject_uniqueness.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::Strategy: reject_strategy.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::Replay: reject_replay.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::DistributionBias: reject_distribution_bias.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::UniquenessBudget: reject_uniqueness_budget.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::None: break;
+    }
+}
+
+inline const char* reject_reason_label(RejectReason reason) {
+    switch (reason) {
+        case RejectReason::None: return "none";
+        case RejectReason::Prefilter: return "prefilter";
+        case RejectReason::Logic: return "logic";
+        case RejectReason::Uniqueness: return "uniqueness";
+        case RejectReason::Strategy: return "strategy";
+        case RejectReason::Replay: return "replay";
+        case RejectReason::DistributionBias: return "distribution_bias";
+        case RejectReason::UniquenessBudget: return "uniqueness_budget";
+    }
+    return "unknown";
+}
+
+inline std::string cfg_diag_label(const GenerateRunConfig& cfg) {
+    return
+        "geom=" + std::to_string(cfg.box_rows) + "x" + std::to_string(cfg.box_cols) +
+        " difficulty=" + std::to_string(cfg.difficulty_level_required) +
+        " required=" + to_string(cfg.required_strategy) +
+        " threads=" + std::to_string(cfg.threads) +
+        " target=" + std::to_string(cfg.target_puzzles) +
+        " fast_test=" + std::string(cfg.fast_test_mode ? "1" : "0") +
+        " pattern_forcing=" + std::string(cfg.pattern_forcing_enabled ? "1" : "0") +
+        " mcts=" + std::string(cfg.mcts_digger_enabled ? "1" : "0") +
+        " max_attempts=" + std::to_string(cfg.max_attempts) +
+        " max_total_time_s=" + std::to_string(cfg.max_total_time_s) +
+        " attempt_time_budget_s=" + std::to_string(cfg.attempt_time_budget_s) +
+        " attempt_node_budget=" + std::to_string(cfg.attempt_node_budget) +
+        " reseed_interval_s=" + std::to_string(cfg.reseed_interval_s) +
+        " force_new_seed_per_attempt=" + std::string(cfg.force_new_seed_per_attempt ? "1" : "0");
+}
+
+inline uint64_t splitmix64_next(uint64_t& state) {
+    state += 0x9E3779B97F4A7C15ULL;
+    uint64_t z = state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+inline std::string detect_measurement_profile(const GenerateRunConfig& cfg) {
+    if (cfg.fast_test_mode && cfg.difficulty_level_required >= 8) {
+        return "relaxed-clue-fast-test";
+    }
+    return "strict-contract";
+}
+
+inline bool should_trace_attempt_diag(
+    const GenerateRunConfig& cfg,
+    uint64_t local_attempts,
+    bool ok,
+    RejectReason reason,
+    bool timed_out) {
+    if (local_attempts <= 3) return true;
+    if (ok) return cfg.required_strategy != RequiredStrategy::None;
+    if (timed_out) return true;
+    return reason == RejectReason::Logic ||
+           reason == RejectReason::Strategy ||
+           reason == RejectReason::Replay ||
+           reason == RejectReason::DistributionBias;
+}
+
 inline GenerateRunResult run_generic_sudoku(
     const GenerateRunConfig& cfg,
     ConsoleStatsMonitor* monitor = nullptr,
@@ -48,6 +138,7 @@ inline GenerateRunResult run_generic_sudoku(
 
     GenerateRunResult result{};
     result.cpu_backend_selected = cfg.cpu_backend;
+    result.measurement_profile = detect_measurement_profile(cfg);
 
     GenericTopology topo;
     std::string topo_err;
@@ -62,6 +153,9 @@ inline GenerateRunResult run_generic_sudoku(
     const int n = topo.n;
     const int nn = topo.nn;
     GenerateRunConfig run_cfg = cfg;
+    const bool auto_clue_range_requested =
+        (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues);
+    const std::string measurement_profile = detect_measurement_profile(run_cfg);
 
     if (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues) {
         const ClueRange auto_range = resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy);
@@ -69,11 +163,24 @@ inline GenerateRunResult run_generic_sudoku(
         if (run_cfg.max_clues <= 0) run_cfg.max_clues = auto_range.max_clues;
         if (run_cfg.max_clues < run_cfg.min_clues) run_cfg.max_clues = run_cfg.min_clues;
     }
+    if (auto_clue_range_requested && run_cfg.difficulty_level_required >= 9) {
+        const int relaxed_min = std::max(run_cfg.min_clues, std::max(4, n));
+        const int relaxed_max = std::max(relaxed_min, static_cast<int>(0.70 * static_cast<double>(nn)));
+        run_cfg.min_clues = relaxed_min;
+        run_cfg.max_clues = relaxed_max;
+    }
     run_cfg.min_clues = std::clamp(run_cfg.min_clues, 0, nn);
     run_cfg.max_clues = std::clamp(run_cfg.max_clues, run_cfg.min_clues, nn);
+    result.effective_min_clues = run_cfg.min_clues;
+    result.effective_max_clues = run_cfg.max_clues;
 
     const bool wants_p7_plus = run_cfg.difficulty_level_required >= 7;
     const bool wants_p8 = run_cfg.difficulty_level_required >= 8;
+    const bool is_large_geometry = (n >= 16);
+    const bool is_16x16_geometry = (n == 16);
+    const bool is_25x25_plus_geometry = (n >= 25);
+    const bool is_36x36_plus_geometry = (n >= 36);
+    const bool is_25x25_plus_p8_geometry = is_25x25_plus_geometry && wants_p8;
 
     if (!run_cfg.fast_test_mode) {
         if (run_cfg.max_attempts == 0) {
@@ -119,20 +226,94 @@ inline GenerateRunResult run_generic_sudoku(
         run_cfg.allow_proxy_advanced = true;
 
         if (run_cfg.max_attempts == 0) {
-            run_cfg.max_attempts = std::max<uint64_t>(32ULL, run_cfg.target_puzzles * 32ULL);
+            if (is_25x25_plus_p8_geometry) {
+                run_cfg.max_attempts = is_36x36_plus_geometry
+                    ? std::max<uint64_t>(128ULL, run_cfg.target_puzzles * 128ULL)
+                    : std::max<uint64_t>(96ULL, run_cfg.target_puzzles * 96ULL);
+            } else if (is_36x36_plus_geometry) {
+                run_cfg.max_attempts = std::max<uint64_t>(96ULL, run_cfg.target_puzzles * 96ULL);
+            } else if (is_large_geometry) {
+                run_cfg.max_attempts = std::max<uint64_t>(64ULL, run_cfg.target_puzzles * 64ULL);
+            } else {
+                run_cfg.max_attempts = std::max<uint64_t>(32ULL, run_cfg.target_puzzles * 32ULL);
+            }
         }
         if (run_cfg.max_total_time_s == 0) {
-            run_cfg.max_total_time_s = 20ULL;
+            if (is_25x25_plus_p8_geometry) {
+                run_cfg.max_total_time_s = is_36x36_plus_geometry ? 40ULL : 30ULL;
+            } else if (is_36x36_plus_geometry) {
+                run_cfg.max_total_time_s = 32ULL;
+            } else if (is_25x25_plus_geometry) {
+                run_cfg.max_total_time_s = 24ULL;
+            } else if (is_large_geometry) {
+                run_cfg.max_total_time_s = 16ULL;
+            } else {
+                run_cfg.max_total_time_s = 20ULL;
+            }
         }
         if (run_cfg.attempt_time_budget_s <= 0.0) {
-            run_cfg.attempt_time_budget_s = (run_cfg.difficulty_level_required >= 7) ? 1.2 : 0.7;
+            if (is_25x25_plus_p8_geometry) {
+                run_cfg.attempt_time_budget_s = is_36x36_plus_geometry ? 10.0 : 8.0;
+            } else if (is_36x36_plus_geometry) {
+                run_cfg.attempt_time_budget_s = 8.0;
+            } else if (is_25x25_plus_geometry) {
+                run_cfg.attempt_time_budget_s = 6.0;
+            } else if (is_large_geometry) {
+                run_cfg.attempt_time_budget_s = 5.0;
+            } else {
+                run_cfg.attempt_time_budget_s = (run_cfg.difficulty_level_required >= 7) ? 1.2 : 0.7;
+            }
         }
         if (run_cfg.attempt_node_budget == 0) {
-            const uint64_t suggested = suggest_attempt_node_budget(
-                run_cfg.box_rows,
-                run_cfg.box_cols,
-                std::max(1, run_cfg.difficulty_level_required));
-            run_cfg.attempt_node_budget = std::max<uint64_t>(20'000ULL, suggested / 8ULL);
+            if (is_large_geometry) {
+                const uint64_t suggested = suggest_attempt_node_budget(
+                    run_cfg.box_rows,
+                    run_cfg.box_cols,
+                    std::max(1, run_cfg.difficulty_level_required));
+                if (is_25x25_plus_p8_geometry) {
+                    run_cfg.attempt_node_budget = is_36x36_plus_geometry
+                        ? std::clamp<uint64_t>(
+                            std::max<uint64_t>(900'000ULL, suggested / 2ULL),
+                            900'000ULL,
+                            3'000'000ULL)
+                        : std::clamp<uint64_t>(
+                            std::max<uint64_t>(600'000ULL, suggested / 3ULL),
+                            600'000ULL,
+                            2'000'000ULL);
+                } else if (is_36x36_plus_geometry) {
+                    run_cfg.attempt_node_budget = std::clamp<uint64_t>(
+                        std::max<uint64_t>(500'000ULL, suggested / 4ULL),
+                        500'000ULL,
+                        2'000'000ULL);
+                } else if (is_25x25_plus_geometry) {
+                    run_cfg.attempt_node_budget = std::clamp<uint64_t>(
+                        std::max<uint64_t>(350'000ULL, suggested / 5ULL),
+                        350'000ULL,
+                        1'500'000ULL);
+                } else {
+                    run_cfg.attempt_node_budget = 250'000ULL;
+                }
+            } else {
+                const uint64_t suggested = suggest_attempt_node_budget(
+                    run_cfg.box_rows,
+                    run_cfg.box_cols,
+                    std::max(1, run_cfg.difficulty_level_required));
+                run_cfg.attempt_node_budget = std::max<uint64_t>(20'000ULL, suggested / 8ULL);
+            }
+        }
+
+        if (is_25x25_plus_p8_geometry) {
+            if (!run_cfg.pattern_forcing_enabled) {
+                run_cfg.pattern_forcing_enabled = true;
+            }
+            run_cfg.pattern_forcing_tries = std::max(run_cfg.pattern_forcing_tries, is_36x36_plus_geometry ? 24 : 18);
+            if (run_cfg.pattern_forcing_anchor_count <= 0) {
+                run_cfg.pattern_forcing_anchor_count = is_36x36_plus_geometry ? 18 : 14;
+            }
+            run_cfg.pattern_forcing_lock_anchors = true;
+            if (run_cfg.mcts_tuning_profile == "auto") {
+                run_cfg.mcts_tuning_profile = "p8";
+            }
         }
     }
 
@@ -161,12 +342,25 @@ inline GenerateRunResult run_generic_sudoku(
         monitor->set_background_status("runtime initialized");
     }
 
+    log_info(
+        "runner",
+        "config " + cfg_diag_label(run_cfg) +
+        " measurement_profile=" + measurement_profile +
+        " clue_range=" + std::to_string(run_cfg.min_clues) + "-" + std::to_string(run_cfg.max_clues));
+
     std::mutex write_mu;
-    std::mutex result_mu;
 
     std::atomic<uint64_t> accepted{0};
     std::atomic<uint64_t> written{0};
     std::atomic<uint64_t> attempts{0};
+    std::atomic<uint64_t> rejected{0};
+    std::atomic<uint64_t> reject_prefilter{0};
+    std::atomic<uint64_t> reject_logic{0};
+    std::atomic<uint64_t> reject_uniqueness{0};
+    std::atomic<uint64_t> reject_strategy{0};
+    std::atomic<uint64_t> reject_replay{0};
+    std::atomic<uint64_t> reject_distribution_bias{0};
+    std::atomic<uint64_t> reject_uniqueness_budget{0};
 
     std::atomic<uint64_t> uniqueness_calls{0};
     std::atomic<uint64_t> uniqueness_nodes{0};
@@ -177,9 +371,15 @@ inline GenerateRunResult run_generic_sudoku(
     std::atomic<uint64_t> strategy_hidden_use{0};
     std::atomic<uint64_t> strategy_hidden_hit{0};
     std::atomic<uint64_t> mcts_advanced_evals{0};
+    std::atomic<uint64_t> certifier_required_strategy_analyzed{0};
+    std::atomic<uint64_t> certifier_required_strategy_use{0};
+    std::atomic<uint64_t> certifier_required_strategy_hit{0};
     std::atomic<uint64_t> mcts_required_strategy_analyzed{0};
     std::atomic<uint64_t> mcts_required_strategy_use{0};
     std::atomic<uint64_t> mcts_required_strategy_hit{0};
+    std::atomic<uint64_t> pattern_exact_template_used{0};
+    std::atomic<uint64_t> pattern_family_fallback_used{0};
+    std::atomic<uint64_t> required_strategy_exact_contract_met{0};
     std::atomic<uint64_t> required_zero_use_streak_max{0};
     std::atomic<int> best_template_score{0};
     std::atomic<uint64_t> kernel_elapsed_ns{0};
@@ -200,17 +400,6 @@ inline GenerateRunResult run_generic_sudoku(
 
     for (int worker_idx = 0; worker_idx < worker_count; ++worker_idx) {
         workers.emplace_back([&, worker_idx]() {
-            const uint64_t base_seed = (run_cfg.seed == 0)
-                ? static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count())
-                : run_cfg.seed;
-            std::mt19937_64 rng(base_seed ^ (0x9E3779B97F4A7C15ULL + static_cast<uint64_t>(worker_idx) * 0x100000001B3ULL));
-
-            core_engines::GenericSolvedKernel solved(
-                core_engines::GenericSolvedKernel::backend_from_string(run_cfg.cpu_backend));
-            core_engines::GenericQuickPrefilter prefilter;
-            logic::GenericLogicCertify logic;
-            core_engines::GenericUniquenessCounter uniq;
-
             uint64_t local_attempts = 0;
             uint64_t local_written = 0;
             uint64_t local_required_analyzed = 0;
@@ -219,8 +408,40 @@ inline GenerateRunResult run_generic_sudoku(
             uint64_t local_required_zero_use_streak = 0;
             uint64_t local_required_zero_use_streak_max = 0;
             int local_best_template_score = 0;
+            int local_last_template_score_delta = 0;
+            int local_last_mutation_strength = 0;
+            int local_planner_zero_use_streak = 0;
+            int local_planner_failure_streak = 0;
+            int local_adaptive_target_strength = 0;
+            pattern_forcing::PatternKind local_template_family = pattern_forcing::PatternKind::None;
+            pattern_forcing::PatternMutationSource local_mutation_source = pattern_forcing::PatternMutationSource::Random;
+            uint64_t current_attempt_seed = 0;
 
-            while (true) {
+            try {
+                const uint64_t base_seed = (run_cfg.seed == 0)
+                    ? static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count())
+                    : run_cfg.seed;
+                uint64_t worker_seed_state =
+                    base_seed ^
+                    (0x9E3779B97F4A7C15ULL + static_cast<uint64_t>(worker_idx) * 0x100000001B3ULL);
+                current_attempt_seed = splitmix64_next(worker_seed_state);
+                std::mt19937_64 rng(current_attempt_seed);
+                auto last_reseed_tp = steady_clock::now();
+
+                core_engines::GenericSolvedKernel solved(
+                    core_engines::GenericSolvedKernel::backend_from_string(run_cfg.cpu_backend));
+                core_engines::GenericQuickPrefilter prefilter;
+                logic::GenericLogicCertify logic;
+                core_engines::GenericUniquenessCounter uniq;
+
+                log_info(
+                    "runner.worker.start",
+                    "worker=" + std::to_string(worker_idx) +
+                    " base_seed=" + std::to_string(base_seed) +
+                    " initial_attempt_seed=" + std::to_string(current_attempt_seed) +
+                    " " + cfg_diag_label(run_cfg));
+
+                while (true) {
                 if (is_cancelled()) {
                     break;
                 }
@@ -250,6 +471,29 @@ inline GenerateRunResult run_generic_sudoku(
 
                 ++local_attempts;
                 attempts.fetch_add(1, std::memory_order_relaxed);
+
+                const auto now_tp = steady_clock::now();
+                bool reseeded = false;
+                if (run_cfg.force_new_seed_per_attempt) {
+                    current_attempt_seed = splitmix64_next(worker_seed_state);
+                    rng.seed(current_attempt_seed);
+                    last_reseed_tp = now_tp;
+                    reseeded = true;
+                } else if (run_cfg.reseed_interval_s > 0 &&
+                           duration_cast<seconds>(now_tp - last_reseed_tp).count() >=
+                               static_cast<long long>(run_cfg.reseed_interval_s)) {
+                    current_attempt_seed = splitmix64_next(worker_seed_state);
+                    rng.seed(current_attempt_seed);
+                    last_reseed_tp = now_tp;
+                    reseeded = true;
+                }
+                if (reseeded && local_attempts <= 3) {
+                    log_info(
+                        "runner.worker.reseed",
+                        "worker=" + std::to_string(worker_idx) +
+                        " attempt=" + std::to_string(local_attempts) +
+                        " seed=" + std::to_string(current_attempt_seed));
+                }
 
                 generator::GenericPuzzleCandidate candidate;
                 RejectReason reason = RejectReason::None;
@@ -289,13 +533,32 @@ inline GenerateRunResult run_generic_sudoku(
                 strategy_hidden_use.fetch_add(perf.strategy_hidden_use, std::memory_order_relaxed);
                 strategy_hidden_hit.fetch_add(perf.strategy_hidden_hit, std::memory_order_relaxed);
                 mcts_advanced_evals.fetch_add(perf.mcts_advanced_evals, std::memory_order_relaxed);
+                certifier_required_strategy_analyzed.fetch_add(perf.certifier_required_strategy_analyzed, std::memory_order_relaxed);
+                certifier_required_strategy_use.fetch_add(perf.certifier_required_strategy_use, std::memory_order_relaxed);
+                certifier_required_strategy_hit.fetch_add(perf.certifier_required_strategy_hit, std::memory_order_relaxed);
                 mcts_required_strategy_analyzed.fetch_add(perf.mcts_required_strategy_analyzed, std::memory_order_relaxed);
                 mcts_required_strategy_use.fetch_add(perf.mcts_required_strategy_use, std::memory_order_relaxed);
                 mcts_required_strategy_hit.fetch_add(perf.mcts_required_strategy_hit, std::memory_order_relaxed);
+                if (perf.pattern_exact_template) {
+                    pattern_exact_template_used.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (perf.pattern_family_fallback_used) {
+                    pattern_family_fallback_used.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (perf.required_strategy_exact_contract_met) {
+                    required_strategy_exact_contract_met.fetch_add(1, std::memory_order_relaxed);
+                }
                 local_required_analyzed += perf.mcts_required_strategy_analyzed;
                 local_required_use += perf.mcts_required_strategy_use;
                 local_required_hit += perf.mcts_required_strategy_hit;
                 local_best_template_score = std::max(local_best_template_score, perf.pattern_best_template_score);
+                local_last_template_score_delta = perf.pattern_template_score_delta;
+                local_last_mutation_strength = perf.pattern_mutation_strength;
+                local_planner_zero_use_streak = perf.pattern_planner_zero_use_streak;
+                local_planner_failure_streak = perf.pattern_planner_failure_streak;
+                local_adaptive_target_strength = perf.pattern_adaptive_target_strength;
+                local_template_family = perf.pattern_template_family;
+                local_mutation_source = perf.pattern_mutation_source;
                 if (perf.mcts_required_strategy_analyzed > 0 && perf.mcts_required_strategy_use == 0) {
                     ++local_required_zero_use_streak;
                     local_required_zero_use_streak_max = std::max(local_required_zero_use_streak_max, local_required_zero_use_streak);
@@ -337,7 +600,7 @@ inline GenerateRunResult run_generic_sudoku(
                     }
 
                     const std::string line = generator::serialize_line_generic(
-                        (base_seed + local_attempts),
+                        current_attempt_seed,
                         run_cfg,
                         candidate,
                         topo.nn);
@@ -364,26 +627,98 @@ inline GenerateRunResult run_generic_sudoku(
                     }
 
                     if (on_log && (accepted_idx % 10ULL == 0ULL || accepted_idx == run_cfg.target_puzzles)) {
+                        log_info(
+                            "runner.worker.accept_cb",
+                            "worker=" + std::to_string(worker_idx) +
+                            " accepted_idx=" + std::to_string(accepted_idx) +
+                            " phase=begin");
                         on_log("accepted=" + std::to_string(accepted_idx) + "/" + std::to_string(run_cfg.target_puzzles));
+                        log_info(
+                            "runner.worker.accept_cb",
+                            "worker=" + std::to_string(worker_idx) +
+                            " accepted_idx=" + std::to_string(accepted_idx) +
+                            " phase=end");
+                    }
+
+                    if (should_trace_attempt_diag(run_cfg, local_attempts, true, reason, timed_out)) {
+                        log_info(
+                            "runner.worker.accept",
+                            "worker=" + std::to_string(worker_idx) +
+                            " attempt=" + std::to_string(local_attempts) +
+                            " seed=" + std::to_string(current_attempt_seed) +
+                            " accepted_idx=" + std::to_string(accepted_idx) +
+                            " clues=" + std::to_string(candidate.clues) +
+                            " reqA/U/H=" + std::to_string(perf.mcts_required_strategy_analyzed) + "/" +
+                                std::to_string(perf.mcts_required_strategy_use) + "/" +
+                                std::to_string(perf.mcts_required_strategy_hit) +
+                            " solved_ms=" + std::to_string(static_cast<double>(perf.solved_elapsed_ns) / 1e6) +
+                            " dig_ms=" + std::to_string(static_cast<double>(perf.dig_elapsed_ns) / 1e6) +
+                            " logic_ms=" + std::to_string(static_cast<double>(perf.logic_elapsed_ns) / 1e6) +
+                            " uniq_ms=" + std::to_string(static_cast<double>(perf.uniqueness_elapsed_ns) / 1e6) +
+                            " template_family=" + std::string(pattern_forcing::pattern_kind_label(local_template_family)) +
+                            " generator_policy=" + std::string(to_string(perf.pattern_generator_policy)) +
+                            " exact_contract=" + std::string(perf.required_strategy_exact_contract_met ? "1" : "0") +
+                            " family_fallback=" + std::string(perf.pattern_family_fallback_used ? "1" : "0") +
+                            " mutation_source=" + std::string(pattern_forcing::pattern_mutation_source_label(local_mutation_source)) +
+                            " template_score=" + std::to_string(perf.pattern_template_score) +
+                            " best_template_score=" + std::to_string(perf.pattern_best_template_score));
                     }
                 } else {
-                    std::lock_guard<std::mutex> lock(result_mu);
-                    ++result.rejected;
-                    accumulate_reject_reason(result, reason, timed_out);
+                    accumulate_reject_reason_atomic(
+                        reason,
+                        timed_out,
+                        rejected,
+                        reject_prefilter,
+                        reject_logic,
+                        reject_uniqueness,
+                        reject_strategy,
+                        reject_replay,
+                        reject_distribution_bias,
+                        reject_uniqueness_budget);
+
+                    if (should_trace_attempt_diag(run_cfg, local_attempts, false, reason, timed_out)) {
+                        log_warn(
+                            "runner.worker.reject",
+                            "worker=" + std::to_string(worker_idx) +
+                            " attempt=" + std::to_string(local_attempts) +
+                            " seed=" + std::to_string(current_attempt_seed) +
+                            " reason=" + std::string(reject_reason_label(reason)) +
+                            " timed_out=" + std::string(timed_out ? "1" : "0") +
+                            " matched_required=" + std::string(strategy_info.matched_required_strategy ? "1" : "0") +
+                            " exact_contract=" + std::string(strategy_info.required_strategy_exact_contract_met ? "1" : "0") +
+                            " family_fallback=" + std::string(strategy_info.family_fallback_used ? "1" : "0") +
+                            " req_confirm_use=" + std::string(strategy_info.required_strategy_use_confirmed ? "1" : "0") +
+                            " req_confirm_hit=" + std::string(strategy_info.required_strategy_hit_confirmed ? "1" : "0") +
+                            " reqA/U/H=" + std::to_string(perf.mcts_required_strategy_analyzed) + "/" +
+                                std::to_string(perf.mcts_required_strategy_use) + "/" +
+                                std::to_string(perf.mcts_required_strategy_hit) +
+                            " solved_ms=" + std::to_string(static_cast<double>(perf.solved_elapsed_ns) / 1e6) +
+                            " dig_ms=" + std::to_string(static_cast<double>(perf.dig_elapsed_ns) / 1e6) +
+                            " prefilter_ms=" + std::to_string(static_cast<double>(perf.prefilter_elapsed_ns) / 1e6) +
+                            " logic_ms=" + std::to_string(static_cast<double>(perf.logic_elapsed_ns) / 1e6) +
+                            " uniq_ms=" + std::to_string(static_cast<double>(perf.uniqueness_elapsed_ns) / 1e6) +
+                            " template_family=" + std::string(pattern_forcing::pattern_kind_label(local_template_family)) +
+                            " generator_policy=" + std::string(to_string(perf.pattern_generator_policy)) +
+                            " mutation_source=" + std::string(pattern_forcing::pattern_mutation_source_label(local_mutation_source)) +
+                            " template_score=" + std::to_string(perf.pattern_template_score) +
+                            " best_template_score=" + std::to_string(perf.pattern_best_template_score) +
+                            " template_score_delta=" + std::to_string(perf.pattern_template_score_delta) +
+                            " mutation_strength=" + std::to_string(perf.pattern_mutation_strength));
+                    }
                 }
 
                 if (monitor != nullptr && ((local_attempts % 16ULL) == 0ULL || local_written > 0)) {
                     monitor->set_attempts(attempts.load(std::memory_order_relaxed));
                     monitor->set_accepted(accepted.load(std::memory_order_relaxed));
                     monitor->set_written(written.load(std::memory_order_relaxed));
-                    monitor->set_rejected(result.rejected);
+                    monitor->set_rejected(rejected.load(std::memory_order_relaxed));
                     monitor->set_analyzed_required_strategy(mcts_required_strategy_analyzed.load(std::memory_order_relaxed));
                     monitor->set_required_strategy_hits(mcts_required_strategy_hit.load(std::memory_order_relaxed));
 
                     WorkerRow row{};
                     row.worker = "worker_" + std::to_string(worker_idx);
                     row.clues = candidate.clues;
-                    row.seed = base_seed;
+                    row.seed = current_attempt_seed;
                     row.applied = local_attempts;
                     row.status = is_paused() ? "paused" : "running";
                     row.reseed_interval_s = run_cfg.reseed_interval_s;
@@ -399,11 +734,31 @@ inline GenerateRunResult run_generic_sudoku(
                     row.required_strategy_hit = local_required_hit;
                     monitor->set_worker_row(static_cast<size_t>(worker_idx), row);
                 }
+                }
+            } catch (const std::exception& ex) {
+                if (cancel_flag != nullptr) {
+                    cancel_flag->store(true, std::memory_order_relaxed);
+                }
+                log_error(
+                    "runner.worker.exception",
+                    "worker=" + std::to_string(worker_idx) +
+                    " attempt=" + std::to_string(local_attempts) +
+                    " what=" + ex.what());
+            } catch (...) {
+                if (cancel_flag != nullptr) {
+                    cancel_flag->store(true, std::memory_order_relaxed);
+                }
+                log_error(
+                    "runner.worker.exception",
+                    "worker=" + std::to_string(worker_idx) +
+                    " attempt=" + std::to_string(local_attempts) +
+                    " what=unknown");
             }
 
             if (monitor != nullptr) {
                 WorkerRow row{};
                 row.worker = "worker_" + std::to_string(worker_idx);
+                row.seed = current_attempt_seed;
                 row.applied = local_attempts;
                 row.status = "done";
                 row.required_strategy_analyzed = local_required_analyzed;
@@ -415,6 +770,7 @@ inline GenerateRunResult run_generic_sudoku(
             log_info(
                 "runner.worker",
                 "worker=" + std::to_string(worker_idx) +
+                " last_seed=" + std::to_string(current_attempt_seed) +
                 " attempts=" + std::to_string(local_attempts) +
                 " written=" + std::to_string(local_written) +
                 " required_analyzed=" + std::to_string(local_required_analyzed) +
@@ -422,19 +778,40 @@ inline GenerateRunResult run_generic_sudoku(
                 " required_hit=" + std::to_string(local_required_hit) +
                 " required_zero_use_streak=" + std::to_string(local_required_zero_use_streak) +
                 " required_zero_use_streak_max=" + std::to_string(local_required_zero_use_streak_max) +
-                " best_template_score=" + std::to_string(local_best_template_score));
+                " best_template_score=" + std::to_string(local_best_template_score) +
+                " template_family=" + std::string(pattern_forcing::pattern_kind_label(local_template_family)) +
+                " mutation_source=" + std::string(pattern_forcing::pattern_mutation_source_label(local_mutation_source)) +
+                " template_score_delta=" + std::to_string(local_last_template_score_delta) +
+                " mutation_strength=" + std::to_string(local_last_mutation_strength) +
+                " planner_zero_use_streak=" + std::to_string(local_planner_zero_use_streak) +
+                " planner_failure_streak=" + std::to_string(local_planner_failure_streak) +
+                " adaptive_target_strength=" + std::to_string(local_adaptive_target_strength));
         });
     }
 
-    for (auto& t : workers) {
+    log_info("runner", "joining workers begin count=" + std::to_string(workers.size()));
+    for (size_t i = 0; i < workers.size(); ++i) {
+        auto& t = workers[i];
         if (t.joinable()) {
+            log_info("runner", "joining worker index=" + std::to_string(i));
             t.join();
+            log_info("runner", "joined worker index=" + std::to_string(i));
         }
     }
+
+    log_info("runner", "all workers joined");
 
     result.accepted = accepted.load(std::memory_order_relaxed);
     result.written = written.load(std::memory_order_relaxed);
     result.attempts = attempts.load(std::memory_order_relaxed);
+    result.rejected = rejected.load(std::memory_order_relaxed);
+    result.reject_prefilter = reject_prefilter.load(std::memory_order_relaxed);
+    result.reject_logic = reject_logic.load(std::memory_order_relaxed);
+    result.reject_uniqueness = reject_uniqueness.load(std::memory_order_relaxed);
+    result.reject_strategy = reject_strategy.load(std::memory_order_relaxed);
+    result.reject_replay = reject_replay.load(std::memory_order_relaxed);
+    result.reject_distribution_bias = reject_distribution_bias.load(std::memory_order_relaxed);
+    result.reject_uniqueness_budget = reject_uniqueness_budget.load(std::memory_order_relaxed);
 
     result.uniqueness_calls = uniqueness_calls.load(std::memory_order_relaxed);
     result.uniqueness_nodes = uniqueness_nodes.load(std::memory_order_relaxed);
@@ -451,9 +828,15 @@ inline GenerateRunResult run_generic_sudoku(
     result.strategy_hidden_use = strategy_hidden_use.load(std::memory_order_relaxed);
     result.strategy_hidden_hit = strategy_hidden_hit.load(std::memory_order_relaxed);
     result.mcts_advanced_evals = mcts_advanced_evals.load(std::memory_order_relaxed);
+    result.certifier_required_strategy_analyzed = certifier_required_strategy_analyzed.load(std::memory_order_relaxed);
+    result.certifier_required_strategy_use = certifier_required_strategy_use.load(std::memory_order_relaxed);
+    result.certifier_required_strategy_hit = certifier_required_strategy_hit.load(std::memory_order_relaxed);
     result.mcts_required_strategy_analyzed = mcts_required_strategy_analyzed.load(std::memory_order_relaxed);
     result.mcts_required_strategy_use = mcts_required_strategy_use.load(std::memory_order_relaxed);
     result.mcts_required_strategy_hit = mcts_required_strategy_hit.load(std::memory_order_relaxed);
+    result.pattern_exact_template_used = pattern_exact_template_used.load(std::memory_order_relaxed);
+    result.pattern_family_fallback_used = pattern_family_fallback_used.load(std::memory_order_relaxed);
+    result.required_strategy_exact_contract_met = required_strategy_exact_contract_met.load(std::memory_order_relaxed);
 
     const double asymmetry_ratio = static_cast<double>(std::max(run_cfg.box_rows, run_cfg.box_cols)) /
                                    static_cast<double>(std::max(1, std::min(run_cfg.box_rows, run_cfg.box_cols)));
@@ -493,14 +876,27 @@ inline GenerateRunResult run_generic_sudoku(
         monitor->set_background_status("done accepted=" + std::to_string(result.accepted) + " written=" + std::to_string(result.written));
     }
 
+    if (result.accepted != result.written) {
+        log_warn(
+            "runner",
+            "accepted_written_mismatch accepted=" + std::to_string(result.accepted) +
+            " written=" + std::to_string(result.written));
+    }
+
     log_info(
         "runner",
         "done accepted=" + std::to_string(result.accepted) +
         " written=" + std::to_string(result.written) +
         " attempts=" + std::to_string(result.attempts) +
+        " cert_required_analyzed=" + std::to_string(result.certifier_required_strategy_analyzed) +
+        " cert_required_use=" + std::to_string(result.certifier_required_strategy_use) +
+        " cert_required_hit=" + std::to_string(result.certifier_required_strategy_hit) +
         " mcts_required_analyzed=" + std::to_string(result.mcts_required_strategy_analyzed) +
         " mcts_required_use=" + std::to_string(result.mcts_required_strategy_use) +
         " mcts_required_hit=" + std::to_string(result.mcts_required_strategy_hit) +
+        " exact_template_used=" + std::to_string(result.pattern_exact_template_used) +
+        " family_fallback_used=" + std::to_string(result.pattern_family_fallback_used) +
+        " exact_contract_met=" + std::to_string(result.required_strategy_exact_contract_met) +
         " required_zero_use_streak_max=" + std::to_string(required_zero_use_streak_max.load(std::memory_order_relaxed)) +
         " best_template_score=" + std::to_string(best_template_score.load(std::memory_order_relaxed)));
 

@@ -4,6 +4,8 @@
 // Opis: Algorytm wyszukujący zbiory Almost Locked Sets (ALS).
 //       Kompletnie Zero-Allocation, bazuje na płaskich tablicach Scratchpada.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -134,6 +136,164 @@ inline int build_als_list(const CandidateState& st, int min_size = 2, int max_si
     }
 
     return sp.als_count;
+}
+
+inline bool als_overlap(const ALS& a, const ALS& b, int words) {
+    for (int w = 0; w < words; ++w) {
+        if ((a.cell_mask[w] & b.cell_mask[w]) != 0ULL) return true;
+    }
+    return false;
+}
+
+inline bool als_path_has_overlap(
+    const ALS& cand,
+    const ALS* als_list,
+    const int* state_als,
+    const int* state_parent,
+    int state_idx,
+    int words) {
+    int cur = state_idx;
+    while (cur >= 0) {
+        if (als_overlap(cand, als_list[state_als[cur]], words)) return true;
+        cur = state_parent[cur];
+    }
+    return false;
+}
+
+inline int als_collect_holders_for_digit(
+    const CandidateState& st,
+    const ALS& als,
+    uint64_t bit,
+    int* out,
+    int out_cap = 8) {
+    const int nn = st.topo->nn;
+    const int words = (nn + 63) >> 6;
+    int cnt = 0;
+    for (int w = 0; w < words; ++w) {
+        uint64_t m = als.cell_mask[w];
+        while (m != 0ULL) {
+            const uint64_t lsb = config::bit_lsb(m);
+            const int b = config::bit_ctz_u64(lsb);
+            const int idx = (w << 6) + b;
+            if (idx < nn && (st.cands[idx] & bit) != 0ULL) {
+                if (cnt < out_cap) out[cnt] = idx;
+                ++cnt;
+            }
+            m = config::bit_clear_lsb_u64(m);
+        }
+    }
+    return cnt;
+}
+
+inline bool als_holders_fully_cross_peer(
+    const CandidateState& st,
+    const int* left,
+    int left_cnt,
+    const int* right,
+    int right_cnt) {
+    if (left_cnt <= 0 || right_cnt <= 0) return false;
+    for (int i = 0; i < left_cnt; ++i) {
+        for (int j = 0; j < right_cnt; ++j) {
+            if (!st.is_peer(left[i], right[j])) return false;
+        }
+    }
+    return true;
+}
+
+inline bool als_restricted_common(
+    const CandidateState& st,
+    const ALS& a,
+    const ALS& b,
+    uint64_t bit,
+    int* a_holders,
+    int& a_cnt,
+    int* b_holders,
+    int& b_cnt,
+    int out_cap = 8) {
+    a_cnt = als_collect_holders_for_digit(st, a, bit, a_holders, out_cap);
+    b_cnt = als_collect_holders_for_digit(st, b, bit, b_holders, out_cap);
+    if (a_cnt <= 0 || b_cnt <= 0 || a_cnt > out_cap || b_cnt > out_cap) return false;
+    return als_holders_fully_cross_peer(st, a_holders, a_cnt, b_holders, b_cnt);
+}
+
+inline ApplyResult als_eliminate_from_seen_intersection(
+    CandidateState& st,
+    uint64_t bit,
+    const int* left,
+    int left_cnt,
+    const int* right,
+    int right_cnt,
+    const ALS* s1,
+    const ALS* s2,
+    const ALS* s3 = nullptr,
+    const ALS* s4 = nullptr) {
+    const int nn = st.topo->nn;
+    for (int t = 0; t < nn; ++t) {
+        if (st.board->values[t] != 0) continue;
+        if ((st.cands[t] & bit) == 0ULL) continue;
+        if (als_cell_in(*s1, t) || als_cell_in(*s2, t) ||
+            (s3 != nullptr && als_cell_in(*s3, t)) ||
+            (s4 != nullptr && als_cell_in(*s4, t))) {
+            continue;
+        }
+
+        bool sees_all = true;
+        for (int i = 0; i < left_cnt; ++i) {
+            if (!st.is_peer(t, left[i])) {
+                sees_all = false;
+                break;
+            }
+        }
+        if (!sees_all) continue;
+        for (int i = 0; i < right_cnt; ++i) {
+            if (!st.is_peer(t, right[i])) {
+                sees_all = false;
+                break;
+            }
+        }
+        if (!sees_all) continue;
+
+        const ApplyResult er = st.eliminate(t, bit);
+        if (er != ApplyResult::NoProgress) return er;
+    }
+    return ApplyResult::NoProgress;
+}
+
+inline int als_collect_rcc_edges(
+    CandidateState& st,
+    const ALS* als_list,
+    int limit,
+    int* edge_u,
+    int* edge_v,
+    uint64_t* edge_digit,
+    int edge_cap) {
+    const int nn = st.topo->nn;
+    const int words = (nn + 63) >> 6;
+    int ah[8]{}, bh[8]{};
+    int ac = 0, bc = 0;
+    int edge_count = 0;
+
+    for (int i = 0; i < limit; ++i) {
+        for (int j = i + 1; j < limit; ++j) {
+            if (als_overlap(als_list[i], als_list[j], words)) continue;
+            uint64_t common = als_list[i].digit_mask & als_list[j].digit_mask;
+            while (common != 0ULL) {
+                const uint64_t bit = config::bit_lsb(common);
+                common = config::bit_clear_lsb_u64(common);
+                if (!als_restricted_common(st, als_list[i], als_list[j], bit, ah, ac, bh, bc)) continue;
+                if (edge_count + 1 >= edge_cap) return edge_count;
+                edge_u[edge_count] = i;
+                edge_v[edge_count] = j;
+                edge_digit[edge_count] = bit;
+                ++edge_count;
+                edge_u[edge_count] = j;
+                edge_v[edge_count] = i;
+                edge_digit[edge_count] = bit;
+                ++edge_count;
+            }
+        }
+    }
+    return edge_count;
 }
 
 } // namespace sudoku_hpc::logic::shared

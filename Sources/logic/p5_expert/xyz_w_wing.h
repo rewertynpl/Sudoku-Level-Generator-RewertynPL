@@ -6,6 +6,8 @@
 //       - W-Wing: 2x bivalue sprzęgnięte oddalonym "Strong Linkiem".
 //       System Zero-Allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

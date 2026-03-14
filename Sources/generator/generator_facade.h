@@ -12,6 +12,8 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <span>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,7 @@
 
 // Pattern Forcing
 #include "pattern_forcing/pattern_planter.h"
+#include "../utils/logging.h"
 
 namespace sudoku_hpc::generator {
 
@@ -104,6 +107,9 @@ struct AttemptPerfStats {
     uint64_t strategy_naked_hit = 0;
     uint64_t strategy_hidden_use = 0;
     uint64_t strategy_hidden_hit = 0;
+    uint64_t certifier_required_strategy_analyzed = 0;
+    uint64_t certifier_required_strategy_use = 0;
+    uint64_t certifier_required_strategy_hit = 0;
     uint64_t mcts_advanced_evals = 0;
     uint64_t mcts_required_strategy_analyzed = 0;
     uint64_t mcts_required_strategy_use = 0;
@@ -111,6 +117,16 @@ struct AttemptPerfStats {
     int pattern_template_score = 0;
     int pattern_best_template_score = 0;
     bool pattern_exact_template = false;
+    bool pattern_family_fallback_used = false;
+    bool required_strategy_exact_contract_met = false;
+    int pattern_template_score_delta = 0;
+    int pattern_mutation_strength = 0;
+    int pattern_planner_zero_use_streak = 0;
+    int pattern_planner_failure_streak = 0;
+    int pattern_adaptive_target_strength = 0;
+    pattern_forcing::PatternKind pattern_template_family = pattern_forcing::PatternKind::None;
+    PatternGeneratorPolicy pattern_generator_policy = PatternGeneratorPolicy::Unsupported;
+    pattern_forcing::PatternMutationSource pattern_mutation_source = pattern_forcing::PatternMutationSource::Random;
 };
 
 // Pomocnicza metoda oceniająca, czy oczekiwany poziom został spełniony
@@ -259,6 +275,131 @@ inline bool generate_one_generic(
     const bool replay_validation_enabled = quality_contract_enabled && cfg.enable_replay_validation;
     const bool need_quality_metrics = quality_contract_enabled || quality_contract_out != nullptr || quality_metrics_out != nullptr;
     const bool budget_enabled = cfg.attempt_time_budget_s > 0.0 || cfg.attempt_node_budget > 0 || force_abort_ptr != nullptr;
+    const bool trace_stage_diag = cfg.fast_test_mode || cfg.required_strategy != RequiredStrategy::None;
+    mcts_digger::GenericMctsBottleneckDigger::RunStats mcts_stats{};
+    const uint8_t* dig_protected_cells = nullptr;
+    const uint64_t* dig_allowed_masks = nullptr;
+    const int* dig_anchor_idx = nullptr;
+    const uint64_t* dig_anchor_masks = nullptr;
+    int dig_anchor_count = 0;
+    bool dig_exact_template = false;
+    int dig_template_score = 0;
+    int dig_best_template_score = 0;
+    int dig_template_score_delta = 0;
+    int dig_mutation_strength = 0;
+    int dig_planner_zero_use_streak = 0;
+    int dig_planner_failure_streak = 0;
+    int dig_adaptive_target_strength = 0;
+    bool dig_family_fallback_used = false;
+    bool dig_exact_contract_met = false;
+    pattern_forcing::PatternKind dig_pattern_kind = pattern_forcing::PatternKind::None;
+    PatternGeneratorPolicy dig_generator_policy = PatternGeneratorPolicy::Unsupported;
+    pattern_forcing::PatternMutationSource dig_mutation_source = pattern_forcing::PatternMutationSource::Random;
+
+    auto log_stage_begin = [&](const char* stage) {
+        if (!trace_stage_diag) {
+            return;
+        }
+        log_info(
+            "generator.stage",
+            "stage=" + std::string(stage) +
+            " phase=begin geom=" + std::to_string(cfg.box_rows) + "x" + std::to_string(cfg.box_cols) +
+            " difficulty=" + std::to_string(cfg.difficulty_level_required) +
+            " required=" + std::string(to_string(cfg.required_strategy)) +
+            " fast_test=" + std::string(cfg.fast_test_mode ? "1" : "0"));
+    };
+
+    auto log_stage_end = [&](const char* stage, bool ok, const SearchAbortControl* stage_budget, const std::string& extra = std::string()) {
+        if (!trace_stage_diag) {
+            return;
+        }
+        std::string msg =
+            "stage=" + std::string(stage) +
+            " phase=end ok=" + std::string(ok ? "1" : "0");
+        if (stage_budget != nullptr) {
+            msg +=
+                " aborted=" + std::string(stage_budget->aborted() ? "1" : "0") +
+                " by_time=" + std::string(stage_budget->aborted_by_time ? "1" : "0") +
+                " by_nodes=" + std::string(stage_budget->aborted_by_nodes ? "1" : "0") +
+                " by_pause=" + std::string(stage_budget->aborted_by_pause ? "1" : "0") +
+                " nodes=" + std::to_string(stage_budget->nodes);
+        }
+        if (!extra.empty()) {
+            msg += " " + extra;
+        }
+        log_info("generator.stage", msg);
+    };
+
+    auto count_protected_cells = [&](const uint8_t* protected_cells) -> int {
+        if (protected_cells == nullptr) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = 0; i < topo.nn; ++i) {
+            count += protected_cells[i] ? 1 : 0;
+        }
+        return count;
+    };
+
+    auto log_pattern_contract = [&](const char* phase, const std::string& extra = std::string()) {
+        if (!trace_stage_diag) {
+            return;
+        }
+        std::string msg =
+            "phase=" + std::string(phase) +
+            " required=" + std::string(to_string(cfg.required_strategy)) +
+            " kind=" + std::string(pattern_forcing::pattern_kind_label(dig_pattern_kind)) +
+            " policy=" + std::string(to_string(dig_generator_policy)) +
+            " exact=" + std::string(dig_exact_template ? "1" : "0") +
+            " family_fallback=" + std::string(dig_family_fallback_used ? "1" : "0") +
+            " exact_contract=" + std::string(dig_exact_contract_met ? "1" : "0") +
+            " anchors=" + std::to_string(dig_anchor_count) +
+            " protected=" + std::to_string(count_protected_cells(dig_protected_cells)) +
+            " score=" + std::to_string(dig_template_score) +
+            " best_score=" + std::to_string(dig_best_template_score) +
+            " score_delta=" + std::to_string(dig_template_score_delta) +
+            " mutation=" + std::string(pattern_forcing::pattern_mutation_source_label(dig_mutation_source)) +
+            " mutation_strength=" + std::to_string(dig_mutation_strength) +
+            " planner_zero_use=" + std::to_string(dig_planner_zero_use_streak) +
+            " planner_fail=" + std::to_string(dig_planner_failure_streak) +
+            " adaptive_target=" + std::to_string(dig_adaptive_target_strength);
+        if (!extra.empty()) {
+            msg += " " + extra;
+        }
+        log_info("pattern.contract", msg);
+    };
+
+    auto log_strategy_contract = [&](const char* phase, RejectReason reject_reason, const logic::GenericLogicCertifyResult* logic_result = nullptr) {
+        if (!trace_stage_diag || cfg.required_strategy == RequiredStrategy::None) {
+            return;
+        }
+        size_t required_slot = 0;
+        std::ostringstream oss;
+        oss << "phase=" << phase
+            << " required=" << to_string(cfg.required_strategy)
+            << " reject=" << static_cast<int>(reject_reason)
+            << " reqA/U/H=" << mcts_stats.required_strategy_analyzed
+            << "/" << mcts_stats.required_strategy_uses
+            << "/" << mcts_stats.required_strategy_hits;
+        if (logic::GenericLogicCertify::slot_from_required_strategy(cfg.required_strategy, required_slot)) {
+            const auto& meta = logic::GenericLogicCertify::strategy_meta_for_slot(required_slot);
+            oss << " slot=" << required_slot
+                << " slot_id=" << meta.id
+                << " coverage=" << to_string(meta.coverage_grade)
+                << " generator_policy=" << to_string(meta.generator_policy)
+                << " zero_alloc=" << to_string(meta.zero_alloc_grade)
+                << " audit_decision=" << to_string(meta.audit_decision);
+            if (logic_result != nullptr) {
+                const auto& stats = logic_result->strategy_stats[required_slot];
+                oss << " logic_use/hit=" << stats.use_count
+                    << "/" << stats.hit_count
+                    << " solved=" << (logic_result->solved ? 1 : 0)
+                    << " timed_out=" << (logic_result->timed_out ? 1 : 0)
+                    << " steps=" << logic_result->steps;
+            }
+        }
+        log_info("strategy.contract", oss.str());
+    };
     
     SearchAbortControl budget;
     if (cfg.attempt_time_budget_s > 0.0) {
@@ -285,31 +426,54 @@ inline bool generate_one_generic(
     // ------------------------------------------------------------------------
     const auto solved_t0 = std::chrono::steady_clock::now();
     bool solved_ok = false;
-    const uint8_t* dig_protected_cells = nullptr;
-    const uint64_t* dig_allowed_masks = nullptr;
-    const int* dig_anchor_idx = nullptr;
-    const uint64_t* dig_anchor_masks = nullptr;
-    int dig_anchor_count = 0;
-    bool dig_exact_template = false;
-    int dig_template_score = 0;
-    int dig_best_template_score = 0;
-    pattern_forcing::PatternKind dig_pattern_kind = pattern_forcing::PatternKind::None;
     
+    const PatternGeneratorPolicy required_generator_policy =
+        pattern_forcing::pattern_strategy_policy(cfg.required_strategy, cfg.difficulty_level_required).generator_policy;
+    const bool strict_exact_contract =
+        cfg.pattern_forcing_enabled &&
+        pattern_forcing::pattern_policy_requires_exact(required_generator_policy);
+    dig_generator_policy = required_generator_policy;
+    dig_exact_contract_met = !strict_exact_contract;
+
     if (cfg.pattern_forcing_enabled) {
         const int pf_tries = std::max(1, cfg.pattern_forcing_tries);
         for (int pf_try = 0; pf_try < pf_tries && !solved_ok; ++pf_try) {
             pattern_forcing::PatternSeedView pf_seed{};
             if (!pattern_forcing::build_seed(
                     topo, cfg, cfg.required_strategy, cfg.difficulty_level_required, rng, pf_seed)) {
+                log_info(
+                    "pattern.contract",
+                    "phase=seed-miss required=" + std::string(to_string(cfg.required_strategy)) +
+                    " pf_try=" + std::to_string(pf_try));
+                if (strict_exact_contract) {
+                    continue;
+                }
                 break;
             }
             if (pf_seed.seed_puzzle == nullptr || pf_seed.allowed_masks == nullptr) {
+                log_info(
+                    "pattern.contract",
+                    "phase=seed-invalid required=" + std::string(to_string(cfg.required_strategy)) +
+                    " pf_try=" + std::to_string(pf_try) +
+                    " kind=" + std::string(pattern_forcing::pattern_kind_label(pf_seed.kind)));
+                if (strict_exact_contract) {
+                    continue;
+                }
                 break;
             }
 
             // Rozwiązanie narzuconego układu przez DLX Solver
+            log_stage_begin("pattern_solve");
             solved_ok = uniq.solve_and_capture(
                 *pf_seed.seed_puzzle, topo, candidate.solution, budget_ptr, pf_seed.allowed_masks);
+            log_stage_end(
+                "pattern_solve",
+                solved_ok,
+                budget_ptr,
+                "pf_try=" + std::to_string(pf_try) +
+                " exact=" + std::string(pf_seed.exact_template ? "1" : "0") +
+                " kind=" + std::string(pattern_forcing::pattern_kind_label(pf_seed.kind)) +
+                " score=" + std::to_string(pf_seed.template_score));
                 
             if (solved_ok && cfg.pattern_forcing_lock_anchors && pf_seed.protected_cells != nullptr &&
                 !pf_seed.protected_cells->empty()) {
@@ -321,9 +485,33 @@ inline bool generate_one_generic(
                 dig_anchor_masks = pf_seed.anchor_masks;
                 dig_anchor_count = pf_seed.anchor_count;
                 dig_exact_template = pf_seed.exact_template;
+                dig_family_fallback_used = pf_seed.family_fallback_used;
+                dig_exact_contract_met = pf_seed.required_strategy_exact_contract_met;
                 dig_template_score = pf_seed.template_score;
                 dig_best_template_score = pf_seed.best_template_score;
+                dig_template_score_delta = pf_seed.template_score_delta;
+                dig_mutation_strength = pf_seed.mutation_strength;
+                dig_planner_zero_use_streak = pf_seed.planner_zero_use_streak;
+                dig_planner_failure_streak = pf_seed.planner_failure_streak;
+                dig_adaptive_target_strength = pf_seed.adaptive_target_strength;
                 dig_pattern_kind = pf_seed.kind;
+                dig_generator_policy = pf_seed.generator_policy;
+                dig_mutation_source = pf_seed.mutation_source;
+            }
+            if (solved_ok) {
+                log_pattern_contract(
+                    "seed-built",
+                    "pf_try=" + std::to_string(pf_try) +
+                    " allowed_masks=" + std::to_string(
+                        (pf_seed.allowed_masks != nullptr) ? static_cast<int>(pf_seed.allowed_masks->size()) : 0));
+            } else {
+                log_info(
+                    "pattern.contract",
+                    "phase=seed-unsolved required=" + std::string(to_string(cfg.required_strategy)) +
+                    " pf_try=" + std::to_string(pf_try) +
+                    " kind=" + std::string(pattern_forcing::pattern_kind_label(pf_seed.kind)) +
+                    " exact=" + std::string(pf_seed.exact_template ? "1" : "0") +
+                    " score=" + std::to_string(pf_seed.template_score));
             }
             if (!solved_ok) {
                 pattern_forcing::note_template_attempt_feedback(
@@ -334,8 +522,10 @@ inline bool generate_one_generic(
     }
 
     // Fallback dla zwykłego generatora jeśli wzorzec nie jest wymagany
-    if (!solved_ok) {
+    if (!solved_ok && !strict_exact_contract) {
+        log_stage_begin("fallback_solve");
         solved_ok = solved.generate(topo, rng, candidate.solution, budget_ptr);
+        log_stage_end("fallback_solve", solved_ok, budget_ptr);
     }
     
     if (collect_perf) {
@@ -360,15 +550,31 @@ inline bool generate_one_generic(
     // ETAP 2: Wykopywanie dziur w planszy i ocena przez Bottleneck Digger
     // ------------------------------------------------------------------------
     const auto dig_t0 = std::chrono::steady_clock::now();
-    mcts_digger::GenericMctsBottleneckDigger::RunStats mcts_stats{};
     if (cfg.mcts_digger_enabled) {
         mcts_digger::GenericMctsBottleneckDigger mcts_digger;
+        candidate.puzzle.resize(candidate.solution.size());
         
+        log_stage_begin("dig");
         const bool dig_ok = mcts_digger.dig_into(
-            candidate.solution, topo, cfg, rng, uniq, logic,
-            candidate.puzzle, candidate.clues, dig_protected_cells,
+            std::span<const uint16_t>(candidate.solution.data(), candidate.solution.size()),
+            topo,
+            cfg,
+            rng,
+            uniq,
+            logic,
+            std::span<uint16_t>(candidate.puzzle.data(), candidate.puzzle.size()),
+            candidate.clues,
+            dig_protected_cells,
             dig_allowed_masks, dig_anchor_idx, dig_anchor_masks, dig_anchor_count, dig_exact_template,
             budget_ptr, &mcts_stats);
+        log_stage_end(
+            "dig",
+            dig_ok,
+            budget_ptr,
+            "advanced_evals=" + std::to_string(mcts_stats.advanced_evals) +
+            " reqA/U/H=" + std::to_string(mcts_stats.required_strategy_analyzed) + "/" +
+                std::to_string(mcts_stats.required_strategy_uses) + "/" +
+                std::to_string(mcts_stats.required_strategy_hits));
             
         if (!dig_ok) {
             pattern_forcing::note_template_attempt_feedback(
@@ -404,7 +610,20 @@ inline bool generate_one_generic(
         perf_out->pattern_template_score = dig_template_score;
         perf_out->pattern_best_template_score = dig_best_template_score;
         perf_out->pattern_exact_template = dig_exact_template;
+        perf_out->pattern_family_fallback_used = dig_family_fallback_used;
+        perf_out->required_strategy_exact_contract_met = dig_exact_contract_met;
+        perf_out->pattern_template_score_delta = dig_template_score_delta;
+        perf_out->pattern_mutation_strength = dig_mutation_strength;
+        perf_out->pattern_planner_zero_use_streak = dig_planner_zero_use_streak;
+        perf_out->pattern_planner_failure_streak = dig_planner_failure_streak;
+        perf_out->pattern_adaptive_target_strength = dig_adaptive_target_strength;
+        perf_out->pattern_template_family = dig_pattern_kind;
+        perf_out->pattern_generator_policy = dig_generator_policy;
+        perf_out->pattern_mutation_source = dig_mutation_source;
     }
+
+    strategy_info.family_fallback_used = dig_family_fallback_used;
+    strategy_info.required_strategy_exact_contract_met = dig_exact_contract_met;
 
     auto note_pattern_feedback = [&]() {
         pattern_forcing::note_template_attempt_feedback(
@@ -421,13 +640,17 @@ inline bool generate_one_generic(
     // ETAP 3: Quick Prefilter
     // ------------------------------------------------------------------------
     const auto prefilter_t0 = std::chrono::steady_clock::now();
+    log_stage_begin("prefilter");
     const bool prefilter_ok = prefilter.check(candidate.puzzle, topo, cfg.min_clues, cfg.max_clues);
+    log_stage_end("prefilter", prefilter_ok, nullptr, "clues=" + std::to_string(candidate.clues));
     if (collect_perf) {
         perf_out->prefilter_elapsed_ns += static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - prefilter_t0).count());
     }
     if (!prefilter_ok) {
+        log_pattern_contract("prefilter-reject", "clues=" + std::to_string(candidate.clues));
+        log_strategy_contract("prefilter-reject", RejectReason::Prefilter, nullptr);
         note_pattern_feedback();
         reason = RejectReason::Prefilter;
         return false;
@@ -472,7 +695,15 @@ inline bool generate_one_generic(
     const auto logic_t0 = std::chrono::steady_clock::now();
     
     // Wywołanie głównego silnika z ewaluacją wszystkich wymaganych strategii
+    log_stage_begin("logic");
     const logic::GenericLogicCertifyResult logic_result = logic.certify(candidate.puzzle, topo, budget_ptr, capture_logic_solution);
+    log_stage_end(
+        "logic",
+        !logic_result.timed_out,
+        budget_ptr,
+        "timed_out=" + std::string(logic_result.timed_out ? "1" : "0") +
+        " solved=" + std::string(logic_result.solved ? "1" : "0") +
+        " steps=" + std::to_string(std::max(0, logic_result.steps)));
     
     if (collect_perf) {
         perf_out->logic_elapsed_ns += static_cast<uint64_t>(
@@ -500,17 +731,30 @@ inline bool generate_one_generic(
 
     if (!cfg.fast_test_mode) {
         if (!evaluate_difficulty_contract_generic(logic_result, cfg.difficulty_level_required)) {
+            log_pattern_contract("difficulty-reject", "clues=" + std::to_string(candidate.clues));
+            log_strategy_contract("difficulty-reject", RejectReason::Strategy, &logic_result);
             note_pattern_feedback();
             reason = RejectReason::Strategy;
             return false;
         }
-
-        const bool contract_ok = evaluate_required_strategy_contract_generic(logic_result, cfg, cfg.required_strategy, strategy_info);
-        if (cfg.required_strategy != RequiredStrategy::None && !contract_ok) {
-            note_pattern_feedback();
-            reason = RejectReason::Strategy;
-            return false;
-        }
+    }
+    const bool contract_ok = evaluate_required_strategy_contract_generic(logic_result, cfg, cfg.required_strategy, strategy_info);
+    if (collect_perf) {
+        size_t required_slot = 0;
+        const bool has_required_slot =
+            logic::GenericLogicCertify::slot_from_required_strategy(cfg.required_strategy, required_slot);
+        perf_out->certifier_required_strategy_analyzed = has_required_slot ? 1ULL : 0ULL;
+        perf_out->certifier_required_strategy_use =
+            has_required_slot ? logic_result.strategy_stats[required_slot].use_count : 0ULL;
+        perf_out->certifier_required_strategy_hit =
+            has_required_slot ? logic_result.strategy_stats[required_slot].hit_count : 0ULL;
+    }
+    if (cfg.required_strategy != RequiredStrategy::None && !contract_ok) {
+        log_pattern_contract("strategy-reject", "clues=" + std::to_string(candidate.clues));
+        log_strategy_contract("strategy-reject", RejectReason::Strategy, &logic_result);
+        note_pattern_feedback();
+        reason = RejectReason::Strategy;
+        return false;
     }
     if (cfg.strict_logical && !logic_result.solved && cfg.required_strategy != RequiredStrategy::Backtracking) {
         note_pattern_feedback();
@@ -535,9 +779,11 @@ inline bool generate_one_generic(
         
         const auto uniq_t0 = std::chrono::steady_clock::now();
         // Limitujemy wyjście DLX na poziomie 2, by nie przeszukiwać całej choinki rozwiązań.
+        log_stage_begin("uniqueness");
         const int solutions = uniq.count_solutions_limit2(candidate.puzzle, topo, uniq_budget_ptr);
         const auto uniq_elapsed_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - uniq_t0).count());
+        log_stage_end("uniqueness", solutions == 1, uniq_budget_ptr, "solutions=" + std::to_string(solutions));
             
         record_uniqueness_perf(uniq_budget, uniq_elapsed_ns);
         
@@ -579,11 +825,15 @@ inline bool generate_one_generic(
     }
     
     if (has_quality_contract_out && !post_processing::quality_contract_passed(*quality_contract_out, cfg)) {
+        log_pattern_contract("quality-reject", "clues=" + std::to_string(candidate.clues));
+        log_strategy_contract("quality-reject", RejectReason::DistributionBias, &logic_result);
         note_pattern_feedback();
         reason = RejectReason::DistributionBias;
         return false;
     }
     
+    log_pattern_contract("accepted", "clues=" + std::to_string(candidate.clues));
+    log_strategy_contract("accepted", RejectReason::None, &logic_result);
     note_pattern_feedback();
     reason = RejectReason::None;
     return true; // Sukces, plansza wygenerowana i obłożona wszelkimi certyfikatami.

@@ -1,3 +1,5 @@
+//Author copyright Marcin Matysek (Rewertyn)
+
 #pragma once
 
 #include <algorithm>

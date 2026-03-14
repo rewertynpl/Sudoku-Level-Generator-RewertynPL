@@ -89,11 +89,42 @@ enum class RejectReason : uint8_t {
     UniquenessBudget,
 };
 
+enum class StrategyCoverageGrade : uint8_t {
+    TextbookFull = 0,
+    FamilyApprox = 1,
+    Partial = 2,
+    WiredOnly = 3,
+    Untested = 4,
+};
+
+enum class PatternGeneratorPolicy : uint8_t {
+    ExactRequired = 0,
+    ExactPreferredFamilyFallback = 1,
+    FamilyOnly = 2,
+    Unsupported = 3,
+};
+
+enum class StrategyZeroAllocGrade : uint8_t {
+    HotpathZeroAllocOk = 0,
+    TlsAllocOnly = 1,
+    VectorInHotpath = 2,
+    NeedsScratchpadRefactor = 3,
+};
+
+enum class StrategyAuditDecision : uint8_t {
+    Keep = 0,
+    Tighten = 1,
+    Rewrite = 2,
+    ExactTemplateMissing = 3,
+};
+
 struct RequiredStrategyAttemptInfo {
     bool analyzed_required_strategy = false;
     bool required_strategy_use_confirmed = false;
     bool required_strategy_hit_confirmed = false;
     bool matched_required_strategy = false;
+    bool required_strategy_exact_contract_met = false;
+    bool family_fallback_used = false;
 };
 
 struct ClueRange {
@@ -169,6 +200,9 @@ struct GenerateRunResult {
     uint64_t written = 0;
     uint64_t attempts = 0;
     uint64_t rejected = 0;
+    std::string measurement_profile = "strict-contract";
+    int effective_min_clues = 0;
+    int effective_max_clues = 0;
 
     uint64_t reject_prefilter = 0;
     uint64_t reject_logic = 0;
@@ -195,9 +229,15 @@ struct GenerateRunResult {
     uint64_t strategy_hidden_use = 0;
     uint64_t strategy_hidden_hit = 0;
     uint64_t mcts_advanced_evals = 0;
+    uint64_t certifier_required_strategy_analyzed = 0;
+    uint64_t certifier_required_strategy_use = 0;
+    uint64_t certifier_required_strategy_hit = 0;
     uint64_t mcts_required_strategy_analyzed = 0;
     uint64_t mcts_required_strategy_use = 0;
     uint64_t mcts_required_strategy_hit = 0;
+    uint64_t pattern_exact_template_used = 0;
+    uint64_t pattern_family_fallback_used = 0;
+    uint64_t required_strategy_exact_contract_met = 0;
 
     double vip_score = 0.0;
     std::string vip_grade = "none";
@@ -211,6 +251,31 @@ struct GenerateRunResult {
     double accepted_per_sec = 0.0;
 };
 
+enum class StrategySmokeVariant : uint8_t {
+    Primary = 0,
+    Asymmetric = 1,
+};
+
+struct StrategySmokeProfile {
+    bool enabled = false;
+    StrategySmokeVariant variant = StrategySmokeVariant::Primary;
+    const char* variant_label = "primary";
+    int box_rows = 0;
+    int box_cols = 0;
+    int difficulty = 0;
+    RequiredStrategy required_strategy = RequiredStrategy::None;
+    uint64_t seed = 0;
+    bool pattern_forcing = false;
+    const char* mcts_profile = "auto";
+    bool strict_canonical = true;
+    bool allow_proxy_advanced = false;
+    uint64_t max_total_time_s = 20;
+    uint64_t max_attempts = 0;
+    uint64_t min_required_use = 1;
+    uint64_t min_required_hit = 1;
+    bool exact_contract_required = true;
+};
+
 inline std::string normalize_token(std::string_view in) {
     std::string out;
     out.reserve(in.size());
@@ -220,6 +285,47 @@ inline std::string normalize_token(std::string_view in) {
         }
     }
     return out;
+}
+
+inline const char* to_string(StrategyCoverageGrade grade) {
+    switch (grade) {
+        case StrategyCoverageGrade::TextbookFull: return "textbook_full";
+        case StrategyCoverageGrade::FamilyApprox: return "family_approx";
+        case StrategyCoverageGrade::Partial: return "partial";
+        case StrategyCoverageGrade::WiredOnly: return "wired_only";
+        case StrategyCoverageGrade::Untested: return "untested";
+    }
+    return "untested";
+}
+
+inline const char* to_string(PatternGeneratorPolicy policy) {
+    switch (policy) {
+        case PatternGeneratorPolicy::ExactRequired: return "exact_required";
+        case PatternGeneratorPolicy::ExactPreferredFamilyFallback: return "exact_preferred_fallback_family";
+        case PatternGeneratorPolicy::FamilyOnly: return "family_only";
+        case PatternGeneratorPolicy::Unsupported: return "unsupported";
+    }
+    return "unsupported";
+}
+
+inline const char* to_string(StrategyZeroAllocGrade grade) {
+    switch (grade) {
+        case StrategyZeroAllocGrade::HotpathZeroAllocOk: return "hotpath_zero_alloc_ok";
+        case StrategyZeroAllocGrade::TlsAllocOnly: return "tls_alloc_only";
+        case StrategyZeroAllocGrade::VectorInHotpath: return "vector_in_hotpath";
+        case StrategyZeroAllocGrade::NeedsScratchpadRefactor: return "needs_scratchpad_refactor";
+    }
+    return "needs_scratchpad_refactor";
+}
+
+inline const char* to_string(StrategyAuditDecision decision) {
+    switch (decision) {
+        case StrategyAuditDecision::Keep: return "keep";
+        case StrategyAuditDecision::Tighten: return "tighten";
+        case StrategyAuditDecision::Rewrite: return "rewrite";
+        case StrategyAuditDecision::ExactTemplateMissing: return "exact-template-missing";
+    }
+    return "rewrite";
 }
 
 inline std::string to_string(RequiredStrategy rs) {
@@ -519,7 +625,141 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     min_clues = std::clamp(min_clues, 0, nn);
     max_clues = std::clamp(max_clues, min_clues, nn);
 
+    switch (required) {
+        case RequiredStrategy::ALSXZ: {
+            const int relaxed_min = static_cast<int>(0.42 * static_cast<double>(nn));
+            const int relaxed_max = static_cast<int>(0.65 * static_cast<double>(nn));
+            min_clues = std::max(min_clues, relaxed_min);
+            max_clues = std::max(max_clues, relaxed_max);
+            max_clues = std::clamp(max_clues, min_clues, nn);
+            break;
+        }
+        default:
+            break;
+    }
+
     return {min_clues, max_clues};
+}
+
+inline uint64_t strategy_smoke_seed(RequiredStrategy rs, StrategySmokeVariant variant) {
+    const uint64_t base = 0xC0D3AULL;
+    const uint64_t tag = static_cast<uint64_t>(static_cast<int>(rs) + 1);
+    const uint64_t bias = (variant == StrategySmokeVariant::Asymmetric) ? 0xA510ULL : 0x510AULL;
+    return (base << 20) ^ (tag * 0x9E3779B185EBCA87ULL) ^ bias;
+}
+
+inline uint64_t strategy_smoke_attempt_cap(RequiredStrategy rs, StrategySmokeVariant variant) {
+    const int lvl = std::max(1, strategy_min_level(rs));
+    uint64_t attempts = 32ULL;
+    if (lvl >= 8) attempts = 192ULL;
+    else if (lvl >= 7) attempts = 160ULL;
+    else if (lvl >= 6) attempts = 128ULL;
+    else if (lvl >= 4) attempts = 96ULL;
+    else if (lvl >= 3) attempts = 64ULL;
+    if (variant == StrategySmokeVariant::Asymmetric) {
+        attempts += attempts / 2ULL;
+    }
+    return attempts;
+}
+
+inline uint64_t strategy_smoke_time_cap_s(RequiredStrategy rs) {
+    const int lvl = std::max(1, strategy_min_level(rs));
+    if (lvl >= 8) return 120ULL;
+    if (lvl >= 7) return 60ULL;
+    return 20ULL;
+}
+
+inline bool strategy_smoke_relaxed_hit_allowed(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::SimpleColoring:
+        case RequiredStrategy::XChain:
+        case RequiredStrategy::XYChain:
+        case RequiredStrategy::WXYZWing:
+        case RequiredStrategy::FinnedSwordfishJellyfish:
+        case RequiredStrategy::ALSXZ:
+        case RequiredStrategy::Medusa3D:
+        case RequiredStrategy::GroupedXCycle:
+        case RequiredStrategy::ContinuousNiceLoop:
+        case RequiredStrategy::ALSXYWing:
+        case RequiredStrategy::ALSChain:
+        case RequiredStrategy::DeathBlossom:
+        case RequiredStrategy::FrankenFish:
+        case RequiredStrategy::MutantFish:
+        case RequiredStrategy::KrakenFish:
+        case RequiredStrategy::Squirmbag:
+        case RequiredStrategy::MSLS:
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
+        case RequiredStrategy::ForcingChains:
+        case RequiredStrategy::DynamicForcingChains:
+            return true;
+        default:
+            return strategy_min_level(rs) >= 7;
+    }
+}
+
+inline uint64_t strategy_smoke_min_required_hit(RequiredStrategy rs) {
+    return strategy_smoke_relaxed_hit_allowed(rs) ? 0ULL : 1ULL;
+}
+
+inline uint64_t strategy_smoke_min_required_use(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::ALSXZ:
+            return 0ULL;
+        default:
+            break;
+    }
+    return (strategy_min_level(rs) >= 7) ? 0ULL : 1ULL;
+}
+
+inline bool strategy_smoke_exact_contract_required(RequiredStrategy rs) {
+    return !(strategy_smoke_min_required_use(rs) == 0ULL &&
+             strategy_smoke_min_required_hit(rs) == 0ULL);
+}
+
+inline StrategySmokeProfile strategy_smoke_profile(
+    RequiredStrategy rs,
+    StrategySmokeVariant variant = StrategySmokeVariant::Primary) {
+    StrategySmokeProfile profile{};
+    profile.required_strategy = rs;
+    profile.variant = variant;
+    profile.variant_label = (variant == StrategySmokeVariant::Asymmetric) ? "asymmetric" : "primary";
+
+    if (rs == RequiredStrategy::None || rs == RequiredStrategy::Backtracking) {
+        return profile;
+    }
+
+    profile.box_rows = (variant == StrategySmokeVariant::Asymmetric) ? 4 : 3;
+    profile.box_cols = (variant == StrategySmokeVariant::Asymmetric) ? 3 : 3;
+    profile.difficulty = std::max(1, strategy_min_level(rs));
+    profile.seed = strategy_smoke_seed(rs, variant);
+    profile.pattern_forcing = (profile.difficulty >= 4);
+    profile.mcts_profile = (profile.difficulty >= 8) ? "p8" : ((profile.difficulty >= 7) ? "p7" : "auto");
+    profile.strict_canonical = true;
+    profile.allow_proxy_advanced = false;
+    profile.max_total_time_s = strategy_smoke_time_cap_s(rs);
+    profile.max_attempts = strategy_smoke_attempt_cap(rs, variant);
+    profile.min_required_use = strategy_smoke_min_required_use(rs);
+    profile.min_required_hit = strategy_smoke_min_required_hit(rs);
+    profile.exact_contract_required = strategy_smoke_exact_contract_required(rs);
+    profile.enabled = required_strategy_selectable_for_geometry(rs, profile.box_rows, profile.box_cols);
+    return profile;
+}
+
+inline StrategySmokeProfile primary_strategy_smoke_profile(RequiredStrategy rs) {
+    return strategy_smoke_profile(rs, StrategySmokeVariant::Primary);
+}
+
+inline StrategySmokeProfile asymmetric_strategy_smoke_profile(RequiredStrategy rs) {
+    return strategy_smoke_profile(rs, StrategySmokeVariant::Asymmetric);
+}
+
+inline bool strategy_has_smoke_profile(RequiredStrategy rs) {
+    return primary_strategy_smoke_profile(rs).enabled;
 }
 
 inline std::string explain_generation_profile_text(const GenerateRunConfig& cfg) {

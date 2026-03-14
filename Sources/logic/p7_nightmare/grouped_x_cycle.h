@@ -4,6 +4,8 @@
 // Description: Direct grouped X-Cycle style elimination on strong/weak graph
 // per digit (zero-allocation).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -57,7 +59,9 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
             bool color_conflict[2] = {false, false};
 
             color[start] = 0;
-            queue[qt++] = start;
+            if (qt < shared::ExactPatternScratchpad::MAX_BFS) {
+                queue[qt++] = start;
+            }
             comp_mark[start] = 1;
 
             // Color component by strong links.
@@ -77,7 +81,9 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
                         color[v] = opp;
                         if (!comp_mark[v]) {
                             comp_mark[v] = 1;
-                            queue[qt++] = v;
+                            if (qt < shared::ExactPatternScratchpad::MAX_BFS) {
+                                queue[qt++] = v;
+                            }
                         }
                     } else if (color[v] == c_u) {
                         color_conflict[c_u] = true;
@@ -180,4 +186,3 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
 }
 
 } // namespace sudoku_hpc::logic::p7_nightmare
-

@@ -4,6 +4,8 @@
 // Opis: Algorytm Dancing Links (DLX) do walidacji unikalności z mechanizmem
 //       narzucania wzorców binarowych (allowed_masks) - Pattern Forcing Bridge.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <span>
 #include <atomic>
 #include <vector>
 
@@ -453,7 +456,7 @@ struct GenericUniquenessCounter {
     }
 
     int count_solutions_limit(
-        const std::vector<uint16_t>& puzzle,
+        std::span<const uint16_t> puzzle,
         const GenericTopology& topo,
         int limit,
         SearchAbortControl* budget = nullptr) const {
@@ -497,11 +500,26 @@ struct GenericUniquenessCounter {
         return out_count;
     }
 
+    int count_solutions_limit(
+        const std::vector<uint16_t>& puzzle,
+        const GenericTopology& topo,
+        int limit,
+        SearchAbortControl* budget = nullptr) const {
+        return count_solutions_limit(std::span<const uint16_t>(puzzle.data(), puzzle.size()), topo, limit, budget);
+    }
+
+    int count_solutions_limit2(
+        std::span<const uint16_t> puzzle,
+        const GenericTopology& topo,
+        SearchAbortControl* budget = nullptr) const {
+        return count_solutions_limit(puzzle, topo, 2, budget);
+    }
+
     int count_solutions_limit2(
         const std::vector<uint16_t>& puzzle,
         const GenericTopology& topo,
         SearchAbortControl* budget = nullptr) const {
-        return count_solutions_limit(puzzle, topo, 2, budget);
+        return count_solutions_limit2(std::span<const uint16_t>(puzzle.data(), puzzle.size()), topo, budget);
     }
 
     // Zwraca rozwiązanie zbudowane z Pattern Forcing Bridge

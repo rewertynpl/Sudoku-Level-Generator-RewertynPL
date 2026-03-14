@@ -6,6 +6,8 @@
 //       (i ta jedna posiada ich 3), oznacza to śmiertelny wzorzec, w którym
 //       tylko jedna dedukcja "ratuje" planszę przed wielokrotnym rozwiązaniem.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

@@ -3,6 +3,8 @@
 // File: logic_result.h
 // Description: Result and telemetry structures for the logical solver.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -122,7 +124,8 @@ struct GenericLogicCertifyResult {
     bool hidden_single_scanned = false;
 
     int steps = 0;
-    std::vector<uint16_t> solved_grid; // kept for replay validation
+    // Telemetry-only payload populated only on explicit capture for replay/debug.
+    std::vector<uint16_t> solved_grid;
 
     // Fixed-size strategy stats matching GenericLogicCertify::StrategySlot.
     std::array<StrategyStats, kStrategySlotCount> strategy_stats{};

@@ -7,6 +7,8 @@
 //       dodatkowe komórki znajdują się w obrębie jednego bloku (Box).
 //       Zero-allocation z użyciem ExactPatternScratchpad.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

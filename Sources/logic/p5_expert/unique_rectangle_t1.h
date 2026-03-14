@@ -6,6 +6,8 @@
 //       eliminując kandydatów tworzących ten wzorzec z komórki celującej.
 //       Zero-allocation - pętle rygorystycznie oparte na bitboardach.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

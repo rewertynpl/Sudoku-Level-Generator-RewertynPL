@@ -4,6 +4,8 @@
 // Description: Direct Alternating Inference Chains (AIC) and Grouped AIC
 // on strong/weak candidate graphs per digit, zero-allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -73,6 +75,13 @@ inline ApplyResult aic_eliminate_common_peers(
     return ApplyResult::NoProgress;
 }
 
+inline ApplyResult aic_eliminate_start_candidate(
+    CandidateState& st,
+    uint64_t bit,
+    int start_cell) {
+    return st.eliminate(start_cell, bit);
+}
+
 inline ApplyResult alternating_chain_core(
     CandidateState& st,
     int depth_cap,
@@ -131,6 +140,17 @@ inline ApplyResult alternating_chain_core(
                         const int v = neighbors[i];
                         const int nd = dep + 1;
 
+                        int* const vis = (next_type == 0) ? vis_even : vis_odd;
+                        int* const vis_other = (next_type == 0) ? vis_odd : vis_even;
+                        if (vis_other[v] != 0) {
+                            const ApplyResult er = aic_eliminate_start_candidate(st, bit, start_cell);
+                            if (er == ApplyResult::Contradiction) return er;
+                            if (er == ApplyResult::Progress) {
+                                used_flag = true;
+                                return er;
+                            }
+                        }
+
                         if (v == start) {
                             // Start-closure inferences are handled in dedicated
                             // Nice Loop strategy to keep AIC core conservative.
@@ -151,7 +171,6 @@ inline ApplyResult alternating_chain_core(
                             }
                         }
 
-                        int* const vis = (next_type == 0) ? vis_even : vis_odd;
                         if (vis[v] != 0) continue;
                         vis[v] = 1;
                         if (qt >= shared::ExactPatternScratchpad::MAX_BFS) continue;
@@ -173,17 +192,25 @@ inline ApplyResult bounded_implication_core(
     StrategyStats& s,
     GenericLogicCertifyResult& r,
     int max_iters,
+    bool allow_weak_start,
     bool& used_flag) {
     (void)r;
     const uint64_t t0 = get_current_time_ns();
     ++s.use_count;
 
     const int depth_cap = std::clamp(max_iters, 6, 28);
-    const bool allow_weak_start = false;
-
     const ApplyResult ar = alternating_chain_core(st, depth_cap, allow_weak_start, used_flag);
     s.elapsed_ns += get_current_time_ns() - t0;
     return ar;
+}
+
+inline ApplyResult bounded_implication_core(
+    CandidateState& st,
+    StrategyStats& s,
+    GenericLogicCertifyResult& r,
+    int max_iters,
+    bool& used_flag) {
+    return bounded_implication_core(st, s, r, max_iters, false, used_flag);
 }
 
 // Backward-compatible alias for older modules.
@@ -193,12 +220,13 @@ inline ApplyResult bounded_implication_proxy(
     GenericLogicCertifyResult& r,
     int max_iters,
     bool& used_flag) {
-    return bounded_implication_core(st, s, r, max_iters, used_flag);
+    return bounded_implication_core(st, s, r, max_iters, false, used_flag);
 }
 
 inline ApplyResult apply_aic(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     bool used = false;
-    const ApplyResult res = bounded_implication_core(st, s, r, 8, used);
+    const int depth_cap = std::clamp(8 + st.topo->n / 3, 8, 16);
+    const ApplyResult res = bounded_implication_core(st, s, r, depth_cap, false, used);
     if (res == ApplyResult::Progress && used) {
         ++s.hit_count;
         r.used_aic = true;
@@ -208,7 +236,8 @@ inline ApplyResult apply_aic(CandidateState& st, StrategyStats& s, GenericLogicC
 
 inline ApplyResult apply_grouped_aic(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     bool used = false;
-    const ApplyResult res = bounded_implication_core(st, s, r, 14, used);
+    const int depth_cap = std::clamp(12 + st.topo->n / 2, 12, 24);
+    const ApplyResult res = bounded_implication_core(st, s, r, depth_cap, true, used);
     if (res == ApplyResult::Progress && used) {
         ++s.hit_count;
         r.used_grouped_aic = true;

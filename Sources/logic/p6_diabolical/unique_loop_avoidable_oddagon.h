@@ -4,6 +4,8 @@
 // Description: Direct detectors for Unique Loop, Avoidable Rectangle and
 // Bivalue Oddagon (zero-allocation, asymmetric geometry compatible).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

@@ -2,8 +2,10 @@
 // SUDOKU HPC - LOGIC ENGINE
 // Module: als_xy_wing_chain.h (Level 7 - Nightmare)
 // Description: Direct zero-allocation passes for ALS-XY-Wing, ALS-Chain and
-// ALS-AIC style eliminations, with conservative fallback composition.
+// ALS-AIC style eliminations on a shared ALS/RCC core.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -20,167 +22,81 @@
 #include "../p6_diabolical/als_xz.h"
 #include "../p5_expert/xyz_w_wing.h"
 #include "../p6_diabolical/chains_basic.h"
+#include "aic_grouped_aic.h"
 
 namespace sudoku_hpc::logic::p7_nightmare {
 
 inline bool als_deep_pass_allowed(const CandidateState& st) {
-    if (st.topo->n > 25) return false;
-    return st.board->empty_cells <= (st.topo->nn - 2 * st.topo->n);
+    if (st.topo->n > 49) return false;
+    return st.board->empty_cells <= (st.topo->nn - std::max(st.topo->n, (3 * st.topo->n) / 2));
 }
 
-inline bool als_overlap(const shared::ALS& a, const shared::ALS& b, int words) {
-    for (int w = 0; w < words; ++w) {
-        if ((a.cell_mask[w] & b.cell_mask[w]) != 0ULL) return true;
-    }
-    return false;
+inline int als_direct_max_size(const CandidateState& st) {
+    if (st.topo->n <= 12 && st.board->empty_cells <= (st.topo->nn - 3 * st.topo->n)) return 5;
+    if (st.topo->n <= 16 && st.board->empty_cells <= (st.topo->nn - 4 * st.topo->n)) return 5;
+    if (st.topo->n <= 25 && st.board->empty_cells <= (st.topo->nn - 3 * st.topo->n)) return 5;
+    if (st.topo->n <= 36 && st.board->empty_cells <= (st.topo->nn - 2 * st.topo->n)) return 5;
+    return 4;
 }
 
-inline bool als_path_has_overlap(
-    const shared::ALS& cand,
-    const shared::ALS* als_list,
-    const int* state_als,
-    const int* state_parent,
-    int state_idx,
-    int words) {
-    int cur = state_idx;
-    while (cur >= 0) {
-        if (als_overlap(cand, als_list[state_als[cur]], words)) return true;
-        cur = state_parent[cur];
-    }
-    return false;
-}
+inline int build_als_xy_list(const CandidateState& st) {
+    auto& sp = shared::exact_pattern_scratchpad();
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
+    if (sp.als_count >= shared::ExactPatternScratchpad::MAX_NN) return als_cnt;
 
-inline int als_collect_holders_for_digit(
-    const CandidateState& st,
-    const shared::ALS& als,
-    uint64_t bit,
-    int* out) {
     const int nn = st.topo->nn;
     const int words = (nn + 63) >> 6;
-    int cnt = 0;
-    for (int w = 0; w < words; ++w) {
-        uint64_t m = als.cell_mask[w];
-        while (m != 0ULL) {
-            const uint64_t lsb = config::bit_lsb(m);
-            const int b = config::bit_ctz_u64(lsb);
-            const int idx = (w << 6) + b;
-            if (idx < nn && (st.cands[idx] & bit) != 0ULL) {
-                out[cnt++] = idx;
-            }
-            m = config::bit_clear_lsb_u64(m);
-        }
+    for (int idx = 0; idx < nn; ++idx) {
+        if (st.board->values[idx] != 0) continue;
+        const uint64_t m = st.cands[idx];
+        if (std::popcount(m) != 2) continue;
+
+        const int cell[1] = {idx};
+        shared::als_push_record(sp, words, -1, cell, 1, m);
+        if (sp.als_count >= shared::ExactPatternScratchpad::MAX_NN) break;
     }
-    return cnt;
+    return sp.als_count;
 }
 
-inline bool holders_fully_cross_peer(
-    const CandidateState& st,
-    const int* left,
-    int left_cnt,
-    const int* right,
-    int right_cnt) {
-    if (left_cnt <= 0 || right_cnt <= 0) return false;
-    for (int i = 0; i < left_cnt; ++i) {
-        for (int j = 0; j < right_cnt; ++j) {
-            if (!st.is_peer(left[i], right[j])) return false;
-        }
-    }
-    return true;
-}
+inline ApplyResult direct_als_xz_bridge_pass(CandidateState& st, int als_limit) {
+    auto& sp = shared::exact_pattern_scratchpad();
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
+    if (als_cnt < 2) return ApplyResult::NoProgress;
 
-inline bool als_restricted_common(
-    const CandidateState& st,
-    const shared::ALS& a,
-    const shared::ALS& b,
-    uint64_t bit,
-    int* a_holders,
-    int& a_cnt,
-    int* b_holders,
-    int& b_cnt) {
-    a_cnt = als_collect_holders_for_digit(st, a, bit, a_holders);
-    b_cnt = als_collect_holders_for_digit(st, b, bit, b_holders);
-    if (a_cnt <= 0 || b_cnt <= 0) return false;
-    return holders_fully_cross_peer(st, a_holders, a_cnt, b_holders, b_cnt);
-}
-
-inline ApplyResult eliminate_from_seen_intersection(
-    CandidateState& st,
-    uint64_t bit,
-    const int* h1,
-    int h1_cnt,
-    const int* h2,
-    int h2_cnt,
-    const shared::ALS* s1,
-    const shared::ALS* s2,
-    const shared::ALS* s3 = nullptr,
-    const shared::ALS* s4 = nullptr) {
     const int nn = st.topo->nn;
-    for (int t = 0; t < nn; ++t) {
-        if (st.board->values[t] != 0) continue;
-        if ((st.cands[t] & bit) == 0ULL) continue;
-        if (shared::als_cell_in(*s1, t) || shared::als_cell_in(*s2, t) ||
-            (s3 != nullptr && shared::als_cell_in(*s3, t)) ||
-            (s4 != nullptr && shared::als_cell_in(*s4, t))) {
-            continue;
-        }
+    const int words = (nn + 63) >> 6;
+    const int limit = std::min(als_cnt, als_limit);
+    int a_x[8]{}, b_x[8]{}, a_z[8]{}, b_z[8]{};
+    int a_xc = 0, b_xc = 0, a_zc = 0, b_zc = 0;
 
-        bool sees_all = true;
-        for (int i = 0; i < h1_cnt; ++i) {
-            if (!st.is_peer(t, h1[i])) {
-                sees_all = false;
-                break;
+    for (int ia = 0; ia < limit; ++ia) {
+        const shared::ALS& a = sp.als_list[ia];
+        for (int ib = ia + 1; ib < limit; ++ib) {
+            const shared::ALS& b = sp.als_list[ib];
+            if (shared::als_overlap(a, b, words)) continue;
+
+            uint64_t xmask = a.digit_mask & b.digit_mask;
+            while (xmask != 0ULL) {
+                const uint64_t x = config::bit_lsb(xmask);
+                xmask = config::bit_clear_lsb_u64(xmask);
+                if (!shared::als_restricted_common(st, a, b, x, a_x, a_xc, b_x, b_xc)) continue;
+
+                uint64_t zmask = (a.digit_mask & b.digit_mask) & ~x;
+                while (zmask != 0ULL) {
+                    const uint64_t z = config::bit_lsb(zmask);
+                    zmask = config::bit_clear_lsb_u64(zmask);
+                    a_zc = shared::als_collect_holders_for_digit(st, a, z, a_z);
+                    b_zc = shared::als_collect_holders_for_digit(st, b, z, b_z);
+                    if (a_zc <= 0 || b_zc <= 0) continue;
+                    const ApplyResult er = shared::als_eliminate_from_seen_intersection(
+                        st, z, a_z, a_zc, b_z, b_zc, &a, &b);
+                    if (er != ApplyResult::NoProgress) return er;
+                }
             }
         }
-        if (!sees_all) continue;
-        for (int i = 0; i < h2_cnt; ++i) {
-            if (!st.is_peer(t, h2[i])) {
-                sees_all = false;
-                break;
-            }
-        }
-        if (!sees_all) continue;
-
-        const ApplyResult er = st.eliminate(t, bit);
-        if (er != ApplyResult::NoProgress) return er;
     }
+
     return ApplyResult::NoProgress;
-}
-
-inline int als_collect_rcc_edges(
-    CandidateState& st,
-    const shared::ALS* als_list,
-    int limit,
-    int* edge_u,
-    int* edge_v,
-    uint64_t* edge_digit) {
-    const int nn = st.topo->nn;
-    const int words = (nn + 63) >> 6;
-    int ah[8]{}, bh[8]{};
-    int ac = 0, bc = 0;
-    int edge_count = 0;
-    constexpr int EDGE_CAP = 1024;
-
-    for (int i = 0; i < limit; ++i) {
-        for (int j = i + 1; j < limit; ++j) {
-            if (als_overlap(als_list[i], als_list[j], words)) continue;
-            uint64_t common = als_list[i].digit_mask & als_list[j].digit_mask;
-            while (common != 0ULL) {
-                const uint64_t bit = config::bit_lsb(common);
-                common = config::bit_clear_lsb_u64(common);
-                if (!als_restricted_common(st, als_list[i], als_list[j], bit, ah, ac, bh, bc)) continue;
-                if (edge_count + 1 >= EDGE_CAP) return edge_count;
-                edge_u[edge_count] = i;
-                edge_v[edge_count] = j;
-                edge_digit[edge_count] = bit;
-                ++edge_count;
-                edge_u[edge_count] = j;
-                edge_v[edge_count] = i;
-                edge_digit[edge_count] = bit;
-                ++edge_count;
-            }
-        }
-    }
-    return edge_count;
 }
 
 inline ApplyResult direct_als_graph_chain_pass(
@@ -189,13 +105,13 @@ inline ApplyResult direct_als_graph_chain_pass(
     int max_depth,
     int als_limit) {
     auto& sp = shared::exact_pattern_scratchpad();
-    const int als_cnt = shared::build_als_list(st, 2, 4);
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
     if (als_cnt < 3) return ApplyResult::NoProgress;
 
     const int limit = std::min(als_cnt, als_limit);
     int edge_u[1024]{}, edge_v[1024]{};
     uint64_t edge_digit[1024]{};
-    const int edge_count = als_collect_rcc_edges(st, sp.als_list, limit, edge_u, edge_v, edge_digit);
+    const int edge_count = shared::als_collect_rcc_edges(st, sp.als_list, limit, edge_u, edge_v, edge_digit, 1024);
     if (edge_count == 0) return ApplyResult::NoProgress;
 
     const int nn = st.topo->nn;
@@ -245,10 +161,10 @@ inline ApplyResult direct_als_graph_chain_pass(
                 while (zmask != 0ULL) {
                     const uint64_t z = config::bit_lsb(zmask);
                     zmask = config::bit_clear_lsb_u64(zmask);
-                    const int start_cnt = als_collect_holders_for_digit(st, sp.als_list[start], z, start_z);
-                    const int end_cnt = als_collect_holders_for_digit(st, sp.als_list[cur_als], z, end_z);
+                    const int start_cnt = shared::als_collect_holders_for_digit(st, sp.als_list[start], z, start_z);
+                    const int end_cnt = shared::als_collect_holders_for_digit(st, sp.als_list[cur_als], z, end_z);
                     if (start_cnt <= 0 || end_cnt <= 0) continue;
-                    const ApplyResult er = eliminate_from_seen_intersection(
+                    const ApplyResult er = shared::als_eliminate_from_seen_intersection(
                         st, z, start_z, start_cnt, end_z, end_cnt, &sp.als_list[start], &sp.als_list[cur_als]);
                     if (er != ApplyResult::NoProgress) return er;
                 }
@@ -261,7 +177,7 @@ inline ApplyResult direct_als_graph_chain_pass(
                 const int nxt = edge_v[e];
                 const int out_digit = config::bit_ctz_u64(edge_digit[e]) + 1;
                 if (out_digit == in_digit || nxt == start) continue;
-                if (als_path_has_overlap(sp.als_list[nxt], sp.als_list, state_als, state_parent, sid, words)) continue;
+                if (shared::als_path_has_overlap(sp.als_list[nxt], sp.als_list, state_als, state_parent, sid, words)) continue;
 
                 const int visit_idx = nxt * 64 + (out_digit - 1);
                 if (visit_idx < visited_cap && sp.visited[visit_idx] != 0) continue;
@@ -283,7 +199,7 @@ inline ApplyResult direct_als_graph_chain_pass(
 
 inline ApplyResult direct_als_xy_wing_pass(CandidateState& st) {
     auto& sp = shared::exact_pattern_scratchpad();
-    const int als_cnt = shared::build_als_list(st, 2, 4);
+    const int als_cnt = build_als_xy_list(st);
     if (als_cnt < 3) return ApplyResult::NoProgress;
 
     const int nn = st.topo->nn;
@@ -298,7 +214,7 @@ inline ApplyResult direct_als_xy_wing_pass(CandidateState& st) {
         for (int i1 = 0; i1 < limit; ++i1) {
             if (i1 == ip) continue;
             const shared::ALS& wing1 = sp.als_list[i1];
-            if (als_overlap(pivot, wing1, words)) continue;
+            if (shared::als_overlap(pivot, wing1, words)) continue;
 
             const uint64_t common_p1 = pivot.digit_mask & wing1.digit_mask;
             if (common_p1 == 0ULL) continue;
@@ -306,7 +222,7 @@ inline ApplyResult direct_als_xy_wing_pass(CandidateState& st) {
             for (int i2 = i1 + 1; i2 < limit; ++i2) {
                 if (i2 == ip) continue;
                 const shared::ALS& wing2 = sp.als_list[i2];
-                if (als_overlap(pivot, wing2, words) || als_overlap(wing1, wing2, words)) continue;
+                if (shared::als_overlap(pivot, wing2, words) || shared::als_overlap(wing1, wing2, words)) continue;
 
                 const uint64_t common_p2 = pivot.digit_mask & wing2.digit_mask;
                 if (common_p2 == 0ULL) continue;
@@ -315,22 +231,22 @@ inline ApplyResult direct_als_xy_wing_pass(CandidateState& st) {
                 while (wx != 0ULL) {
                     const uint64_t x = config::bit_lsb(wx);
                     wx = config::bit_clear_lsb_u64(wx);
-                    if (!als_restricted_common(st, pivot, wing1, x, p_x, p_xc, w1_x, w1_xc)) continue;
+                    if (!shared::als_restricted_common(st, pivot, wing1, x, p_x, p_xc, w1_x, w1_xc)) continue;
 
                     uint64_t wy = common_p2 & ~x;
                     while (wy != 0ULL) {
                         const uint64_t y = config::bit_lsb(wy);
                         wy = config::bit_clear_lsb_u64(wy);
-                        if (!als_restricted_common(st, pivot, wing2, y, p_y, p_yc, w2_y, w2_yc)) continue;
+                        if (!shared::als_restricted_common(st, pivot, wing2, y, p_y, p_yc, w2_y, w2_yc)) continue;
 
                         uint64_t zmask = (wing1.digit_mask & wing2.digit_mask) & ~(x | y);
                         while (zmask != 0ULL) {
                             const uint64_t z = config::bit_lsb(zmask);
                             zmask = config::bit_clear_lsb_u64(zmask);
-                            w1_zc = als_collect_holders_for_digit(st, wing1, z, w1_z);
-                            w2_zc = als_collect_holders_for_digit(st, wing2, z, w2_z);
+                            w1_zc = shared::als_collect_holders_for_digit(st, wing1, z, w1_z);
+                            w2_zc = shared::als_collect_holders_for_digit(st, wing2, z, w2_z);
                             if (w1_zc <= 0 || w2_zc <= 0) continue;
-                            const ApplyResult er = eliminate_from_seen_intersection(
+                            const ApplyResult er = shared::als_eliminate_from_seen_intersection(
                                 st, z, w1_z, w1_zc, w2_z, w2_zc, &pivot, &wing1, &wing2);
                             if (er != ApplyResult::NoProgress) return er;
                         }
@@ -345,7 +261,7 @@ inline ApplyResult direct_als_xy_wing_pass(CandidateState& st) {
 
 inline ApplyResult direct_als_chain_pass(CandidateState& st) {
     auto& sp = shared::exact_pattern_scratchpad();
-    const int als_cnt = shared::build_als_list(st, 2, 4);
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
     if (als_cnt < 3) return ApplyResult::NoProgress;
 
     const int nn = st.topo->nn;
@@ -360,33 +276,33 @@ inline ApplyResult direct_als_chain_pass(CandidateState& st) {
         for (int ib = 0; ib < limit; ++ib) {
             if (ib == ia) continue;
             const shared::ALS& b = sp.als_list[ib];
-            if (als_overlap(a, b, words)) continue;
+            if (shared::als_overlap(a, b, words)) continue;
 
             uint64_t xmask = a.digit_mask & b.digit_mask;
             while (xmask != 0ULL) {
                 const uint64_t x = config::bit_lsb(xmask);
                 xmask = config::bit_clear_lsb_u64(xmask);
-                if (!als_restricted_common(st, a, b, x, a_x, a_xc, b_x, b_xc)) continue;
+                if (!shared::als_restricted_common(st, a, b, x, a_x, a_xc, b_x, b_xc)) continue;
 
                 for (int ic = 0; ic < limit; ++ic) {
                     if (ic == ia || ic == ib) continue;
                     const shared::ALS& c = sp.als_list[ic];
-                    if (als_overlap(a, c, words) || als_overlap(b, c, words)) continue;
+                    if (shared::als_overlap(a, c, words) || shared::als_overlap(b, c, words)) continue;
 
                     uint64_t ymask = (b.digit_mask & c.digit_mask) & ~x;
                     while (ymask != 0ULL) {
                         const uint64_t y = config::bit_lsb(ymask);
                         ymask = config::bit_clear_lsb_u64(ymask);
-                        if (!als_restricted_common(st, b, c, y, b_y, b_yc, c_y, c_yc)) continue;
+                        if (!shared::als_restricted_common(st, b, c, y, b_y, b_yc, c_y, c_yc)) continue;
 
                         uint64_t zmask = (a.digit_mask & c.digit_mask) & ~(x | y);
                         while (zmask != 0ULL) {
                             const uint64_t z = config::bit_lsb(zmask);
                             zmask = config::bit_clear_lsb_u64(zmask);
-                            a_zc = als_collect_holders_for_digit(st, a, z, a_z);
-                            c_zc = als_collect_holders_for_digit(st, c, z, c_z);
+                            a_zc = shared::als_collect_holders_for_digit(st, a, z, a_z);
+                            c_zc = shared::als_collect_holders_for_digit(st, c, z, c_z);
                             if (a_zc <= 0 || c_zc <= 0) continue;
-                            const ApplyResult er = eliminate_from_seen_intersection(
+                            const ApplyResult er = shared::als_eliminate_from_seen_intersection(
                                 st, z, a_z, a_zc, c_z, c_zc, &a, &b, &c);
                             if (er != ApplyResult::NoProgress) return er;
                         }
@@ -401,7 +317,7 @@ inline ApplyResult direct_als_chain_pass(CandidateState& st) {
 
 inline ApplyResult direct_als_aic_pass(CandidateState& st) {
     auto& sp = shared::exact_pattern_scratchpad();
-    const int als_cnt = shared::build_als_list(st, 2, 4);
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
     if (als_cnt < 4) return ApplyResult::NoProgress;
 
     const int nn = st.topo->nn;
@@ -416,44 +332,44 @@ inline ApplyResult direct_als_aic_pass(CandidateState& st) {
         for (int ib = 0; ib < limit; ++ib) {
             if (ib == ia) continue;
             const shared::ALS& b = sp.als_list[ib];
-            if (als_overlap(a, b, words)) continue;
+            if (shared::als_overlap(a, b, words)) continue;
 
             uint64_t xmask = a.digit_mask & b.digit_mask;
             while (xmask != 0ULL) {
                 const uint64_t x = config::bit_lsb(xmask);
                 xmask = config::bit_clear_lsb_u64(xmask);
-                if (!als_restricted_common(st, a, b, x, a_h, a_hc, b_h, b_hc)) continue;
+                if (!shared::als_restricted_common(st, a, b, x, a_h, a_hc, b_h, b_hc)) continue;
 
                 for (int ic = 0; ic < limit; ++ic) {
                     if (ic == ia || ic == ib) continue;
                     const shared::ALS& c = sp.als_list[ic];
-                    if (als_overlap(a, c, words) || als_overlap(b, c, words)) continue;
+                    if (shared::als_overlap(a, c, words) || shared::als_overlap(b, c, words)) continue;
 
                     uint64_t ymask = (b.digit_mask & c.digit_mask) & ~x;
                     while (ymask != 0ULL) {
                         const uint64_t y = config::bit_lsb(ymask);
                         ymask = config::bit_clear_lsb_u64(ymask);
-                        if (!als_restricted_common(st, b, c, y, b_h, b_hc, c_h, c_hc)) continue;
+                        if (!shared::als_restricted_common(st, b, c, y, b_h, b_hc, c_h, c_hc)) continue;
 
                         for (int id = 0; id < limit; ++id) {
                             if (id == ia || id == ib || id == ic) continue;
                             const shared::ALS& d = sp.als_list[id];
-                            if (als_overlap(a, d, words) || als_overlap(b, d, words) || als_overlap(c, d, words)) continue;
+                            if (shared::als_overlap(a, d, words) || shared::als_overlap(b, d, words) || shared::als_overlap(c, d, words)) continue;
 
                             uint64_t wmask = (c.digit_mask & d.digit_mask) & ~(x | y);
                             while (wmask != 0ULL) {
                                 const uint64_t w = config::bit_lsb(wmask);
                                 wmask = config::bit_clear_lsb_u64(wmask);
-                                if (!als_restricted_common(st, c, d, w, c_h, c_hc, d_h, d_hc)) continue;
+                                if (!shared::als_restricted_common(st, c, d, w, c_h, c_hc, d_h, d_hc)) continue;
 
                                 uint64_t zmask = (a.digit_mask & d.digit_mask) & ~(x | y | w);
                                 while (zmask != 0ULL) {
                                     const uint64_t z = config::bit_lsb(zmask);
                                     zmask = config::bit_clear_lsb_u64(zmask);
-                                    azc = als_collect_holders_for_digit(st, a, z, az);
-                                    dzc = als_collect_holders_for_digit(st, d, z, dz);
+                                    azc = shared::als_collect_holders_for_digit(st, a, z, az);
+                                    dzc = shared::als_collect_holders_for_digit(st, d, z, dz);
                                     if (azc <= 0 || dzc <= 0) continue;
-                                    const ApplyResult er = eliminate_from_seen_intersection(
+                                    const ApplyResult er = shared::als_eliminate_from_seen_intersection(
                                         st, z, az, azc, dz, dzc, &a, &b, &c, &d);
                                     if (er != ApplyResult::NoProgress) return er;
                                 }
@@ -468,26 +384,130 @@ inline ApplyResult direct_als_aic_pass(CandidateState& st) {
     return ApplyResult::NoProgress;
 }
 
+inline bool als_aic_digit_chain_connects(
+    shared::ExactPatternScratchpad& sp,
+    int start_node,
+    int end_node,
+    int depth_cap) {
+    if (start_node < 0 || end_node < 0 || start_node == end_node) return false;
+    int neighbors[256]{};
+    int* const vis_even = sp.visited;
+    int* const vis_odd = sp.bfs_depth;
+    int* const queue_state = sp.bfs_queue;
+    int* const queue_depth = sp.bfs_parent;
+
+    std::fill_n(vis_even, sp.dyn_node_count, 0);
+    std::fill_n(vis_odd, sp.dyn_node_count, 0);
+
+    int qh = 0;
+    int qt = 0;
+    const int first_cnt = aic_collect_neighbors(sp, start_node, 1, neighbors);
+    for (int i = 0; i < first_cnt; ++i) {
+        const int v = neighbors[i];
+        if (v == end_node) return true;
+        if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
+        queue_state[qt] = (v << 1) | 1;
+        queue_depth[qt] = 1;
+        vis_odd[v] = 1;
+        ++qt;
+    }
+
+    while (qh < qt) {
+        const int state = queue_state[qh];
+        const int dep = queue_depth[qh];
+        ++qh;
+
+        const int u = (state >> 1);
+        const int last_type = (state & 1);
+        const int next_type = 1 - last_type;
+        if (dep >= depth_cap) continue;
+
+        const int next_cnt = aic_collect_neighbors(sp, u, next_type, neighbors);
+        for (int i = 0; i < next_cnt; ++i) {
+            const int v = neighbors[i];
+            const int nd = dep + 1;
+            if (v == end_node && (nd & 1) == 1) return true;
+
+            int* const vis = (next_type == 0) ? vis_even : vis_odd;
+            if (vis[v] != 0) continue;
+            vis[v] = 1;
+            if (qt >= shared::ExactPatternScratchpad::MAX_BFS) continue;
+            queue_state[qt] = (v << 1) | next_type;
+            queue_depth[qt] = nd;
+            ++qt;
+        }
+    }
+    return false;
+}
+
+inline ApplyResult direct_als_candidate_chain_bridge_pass(
+    CandidateState& st,
+    int als_limit,
+    int depth_cap) {
+    auto& sp = shared::exact_pattern_scratchpad();
+    const int als_cnt = shared::build_als_list(st, 2, als_direct_max_size(st));
+    if (als_cnt < 2) return ApplyResult::NoProgress;
+
+    const int nn = st.topo->nn;
+    const int words = (nn + 63) >> 6;
+    const int limit = std::min(als_cnt, als_limit);
+    int a_z[8]{}, b_z[8]{};
+
+    for (int digit = 1; digit <= st.topo->n; ++digit) {
+        if (!shared::build_grouped_link_graph_for_digit(st, digit, sp)) continue;
+        if (sp.dyn_node_count < 2 || sp.dyn_strong_edge_count == 0) continue;
+
+        const uint64_t z = (1ULL << (digit - 1));
+        for (int ia = 0; ia < limit; ++ia) {
+            const shared::ALS& a = sp.als_list[ia];
+            if ((a.digit_mask & z) == 0ULL) continue;
+            const int a_zc = shared::als_collect_holders_for_digit(st, a, z, a_z);
+            if (a_zc <= 0 || a_zc > 8) continue;
+
+            for (int ib = ia + 1; ib < limit; ++ib) {
+                const shared::ALS& b = sp.als_list[ib];
+                if ((b.digit_mask & z) == 0ULL) continue;
+                if (shared::als_overlap(a, b, words)) continue;
+                const int b_zc = shared::als_collect_holders_for_digit(st, b, z, b_z);
+                if (b_zc <= 0 || b_zc > 8) continue;
+
+                bool connected = false;
+                for (int i = 0; i < a_zc && !connected; ++i) {
+                    const int na = sp.dyn_cell_to_node[a_z[i]];
+                    if (na < 0) continue;
+                    for (int j = 0; j < b_zc; ++j) {
+                        const int nb = sp.dyn_cell_to_node[b_z[j]];
+                        if (nb < 0) continue;
+                        if (als_aic_digit_chain_connects(sp, na, nb, depth_cap)) {
+                            connected = true;
+                            break;
+                        }
+                    }
+                }
+                if (!connected) continue;
+
+                const ApplyResult er = shared::als_eliminate_from_seen_intersection(
+                    st, z, a_z, a_zc, b_z, b_zc, &a, &b);
+                if (er != ApplyResult::NoProgress) return er;
+            }
+        }
+    }
+
+    return ApplyResult::NoProgress;
+}
+
 inline ApplyResult apply_als_xy_wing(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = st.now_ns();
     ++s.use_count;
 
     ApplyResult ar;
+    const int n = st.topo->n;
+    const int bridge_limit = std::clamp(64 + n * 2, 96, 144);
+    const int graph_limit = std::clamp(48 + n / 2, 56, 80);
+    const int graph_depth = std::clamp(4 + n / 12, 4, 6);
 
     StrategyStats tmp{};
     if (als_deep_pass_allowed(st)) {
-        ar = direct_als_graph_chain_pass(st, 2, 4, 56);
-        if (ar == ApplyResult::Contradiction) {
-            s.elapsed_ns += st.now_ns() - t0;
-            return ar;
-        }
-        if (ar == ApplyResult::Progress) {
-            ++s.hit_count;
-            r.used_als_xy_wing = true;
-            s.elapsed_ns += st.now_ns() - t0;
-            return ar;
-        }
-
         ar = direct_als_xy_wing_pass(st);
         if (ar == ApplyResult::Contradiction) {
             s.elapsed_ns += st.now_ns() - t0;
@@ -499,6 +519,31 @@ inline ApplyResult apply_als_xy_wing(CandidateState& st, StrategyStats& s, Gener
             s.elapsed_ns += st.now_ns() - t0;
             return ar;
         }
+
+        ar = direct_als_xz_bridge_pass(st, bridge_limit);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_xy_wing = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
+        ar = direct_als_graph_chain_pass(st, 2, graph_depth, graph_limit);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_xy_wing = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
     }
 
     ar = p6_diabolical::apply_als_xz(st, tmp, r);
@@ -534,10 +579,40 @@ inline ApplyResult apply_als_chain(CandidateState& st, StrategyStats& s, Generic
     ++s.use_count;
 
     ApplyResult ar;
+    const int n = st.topo->n;
+    const int bridge_limit = std::clamp(72 + n * 2, 104, 160);
+    const int candidate_bridge_limit = std::clamp(56 + n / 2, 64, 96);
+    const int candidate_bridge_depth = std::clamp(7 + n / 10, 7, 10);
+    const int graph_limit = std::clamp(56 + n / 2, 64, 96);
+    const int graph_depth = std::clamp(5 + n / 12, 5, 7);
 
     StrategyStats tmp{};
     if (als_deep_pass_allowed(st)) {
-        ar = direct_als_graph_chain_pass(st, 2, 5, 64);
+        ar = direct_als_xz_bridge_pass(st, bridge_limit);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_chain = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
+        ar = direct_als_candidate_chain_bridge_pass(st, candidate_bridge_limit, candidate_bridge_depth);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_chain = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
+        ar = direct_als_graph_chain_pass(st, 2, graph_depth, graph_limit);
         if (ar == ApplyResult::Contradiction) {
             s.elapsed_ns += st.now_ns() - t0;
             return ar;
@@ -598,6 +673,18 @@ inline ApplyResult apply_als_aic(CandidateState& st, StrategyStats& s, GenericLo
 
     StrategyStats tmp{};
     if (als_deep_pass_allowed(st)) {
+        ar = direct_als_xz_bridge_pass(st, 112);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_aic = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
         ar = direct_als_graph_chain_pass(st, 3, 6, 64);
         if (ar == ApplyResult::Contradiction) {
             s.elapsed_ns += st.now_ns() - t0;
@@ -611,6 +698,18 @@ inline ApplyResult apply_als_aic(CandidateState& st, StrategyStats& s, GenericLo
         }
 
         ar = direct_als_aic_pass(st);
+        if (ar == ApplyResult::Contradiction) {
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+        if (ar == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_als_aic = true;
+            s.elapsed_ns += st.now_ns() - t0;
+            return ar;
+        }
+
+        ar = direct_als_candidate_chain_bridge_pass(st, 72, 10);
         if (ar == ApplyResult::Contradiction) {
             s.elapsed_ns += st.now_ns() - t0;
             return ar;
@@ -635,12 +734,14 @@ inline ApplyResult apply_als_aic(CandidateState& st, StrategyStats& s, GenericLo
         return ar;
     }
 
-    ar = p6_diabolical::apply_x_chain(st, tmp, r);
+    bool used = false;
+    const int implication_depth = std::clamp(10 + st.topo->n / 2, 10, 22);
+    ar = bounded_implication_core(st, tmp, r, implication_depth, true, used);
     if (ar == ApplyResult::Contradiction) {
         s.elapsed_ns += st.now_ns() - t0;
         return ar;
     }
-    if (ar == ApplyResult::Progress) {
+    if (ar == ApplyResult::Progress && used) {
         ++s.hit_count;
         r.used_als_aic = true;
         s.elapsed_ns += st.now_ns() - t0;

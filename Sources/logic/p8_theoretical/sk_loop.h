@@ -6,6 +6,8 @@
 //       wspierajÄ…c siÄ™ kompozycjami gĹ‚Ä™bokich pÄ™tli w razie braku dokĹ‚adnego
 //       dopasowania klasycznego wzorca. Zoptymalizowany dla Zero-Allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -155,6 +157,112 @@ inline ApplyResult apply_sk_loop_exact(CandidateState& st, StrategyStats& s, Gen
                             const int digit = config::bit_ctz_u64(bit) + 1;
                             if (!sk_loop_probe_contradiction(st, corners[ci], digit, probe_steps, sp)) continue;
                             const ApplyResult er = st.eliminate(corners[ci], bit);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    // Exact line exits: if the same extra digit appears on both
+                    // corners of one SK side, eliminate it from the rest of that line.
+                    const uint64_t top_pair = exa & exb;
+                    uint64_t wt = top_pair;
+                    while (wt != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wt);
+                        wt = config::bit_clear_lsb_u64(wt);
+                        for (int cc = 0; cc < n; ++cc) {
+                            const int idx = r1 * n + cc;
+                            if (idx == a || idx == b || st.board->values[idx] != 0) continue;
+                            const ApplyResult er = st.eliminate(idx, x);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    const uint64_t bottom_pair = exc & exd;
+                    uint64_t wb = bottom_pair;
+                    while (wb != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wb);
+                        wb = config::bit_clear_lsb_u64(wb);
+                        for (int cc = 0; cc < n; ++cc) {
+                            const int idx = r2 * n + cc;
+                            if (idx == c || idx == d || st.board->values[idx] != 0) continue;
+                            const ApplyResult er = st.eliminate(idx, x);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    const uint64_t left_pair = exa & exc;
+                    uint64_t wl = left_pair;
+                    while (wl != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wl);
+                        wl = config::bit_clear_lsb_u64(wl);
+                        for (int rr = 0; rr < n; ++rr) {
+                            const int idx = rr * n + c1;
+                            if (idx == a || idx == c || st.board->values[idx] != 0) continue;
+                            const ApplyResult er = st.eliminate(idx, x);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    const uint64_t right_pair = exb & exd;
+                    uint64_t wr = right_pair;
+                    while (wr != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wr);
+                        wr = config::bit_clear_lsb_u64(wr);
+                        for (int rr = 0; rr < n; ++rr) {
+                            const int idx = rr * n + c2;
+                            if (idx == b || idx == d || st.board->values[idx] != 0) continue;
+                            const ApplyResult er = st.eliminate(idx, x);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    // Diagonal pressure: if a diagonal pair shares an extra,
+                    // any cell seeing both corners cannot keep that extra.
+                    const uint64_t diag_ad = exa & exd;
+                    uint64_t wad = diag_ad;
+                    while (wad != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wad);
+                        wad = config::bit_clear_lsb_u64(wad);
+                        for (int t = 0; t < nn; ++t) {
+                            if (t == a || t == d || st.board->values[t] != 0) continue;
+                            if (!st.is_peer(t, a) || !st.is_peer(t, d)) continue;
+                            const ApplyResult er = st.eliminate(t, x);
+                            if (er == ApplyResult::Contradiction) {
+                                s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+                                return er;
+                            }
+                            progress = progress || (er == ApplyResult::Progress);
+                        }
+                    }
+
+                    const uint64_t diag_bc = exb & exc;
+                    uint64_t wbc = diag_bc;
+                    while (wbc != 0ULL) {
+                        const uint64_t x = config::bit_lsb(wbc);
+                        wbc = config::bit_clear_lsb_u64(wbc);
+                        for (int t = 0; t < nn; ++t) {
+                            if (t == b || t == c || st.board->values[t] != 0) continue;
+                            if (!st.is_peer(t, b) || !st.is_peer(t, c)) continue;
+                            const ApplyResult er = st.eliminate(t, x);
                             if (er == ApplyResult::Contradiction) {
                                 s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
                                 return er;

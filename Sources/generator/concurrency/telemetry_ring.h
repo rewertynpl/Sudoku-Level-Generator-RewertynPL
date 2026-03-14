@@ -5,6 +5,8 @@
 //       do przesyłania statystyk telemetrii oraz danych wynikowych z workerów.
 //       Rozmiary chronione cache-line alignmentem (false sharing avoidance).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

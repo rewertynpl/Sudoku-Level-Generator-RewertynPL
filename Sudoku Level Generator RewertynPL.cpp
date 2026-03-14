@@ -3,12 +3,16 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <csignal>
 #include <cstdint>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <mutex>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -25,11 +29,23 @@
 #include "Sources/cli/arg_parser.h"
 #include "Sources/monitor.h"
 #include "Sources/generator/runtime_runner.h"
+#include "Sources/maintenance/quality_benchmark.h"
 #include "Sources/gui.h"
 
 namespace sudoku_hpc {
 
 #ifdef _WIN32
+inline LONG WINAPI log_unhandled_exception(EXCEPTION_POINTERS* ptr) {
+    std::ostringstream out;
+    out << "unhandled_exception";
+    if (ptr != nullptr && ptr->ExceptionRecord != nullptr) {
+        out << " code=0x" << std::hex << static_cast<unsigned long>(ptr->ExceptionRecord->ExceptionCode)
+            << " address=" << ptr->ExceptionRecord->ExceptionAddress;
+    }
+    log_error("main.crash", out.str());
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 inline bool can_use_cli_hotkeys() {
     return _isatty(_fileno(stdin)) != 0 && _isatty(_fileno(stdout)) != 0;
 }
@@ -93,16 +109,50 @@ inline std::jthread start_cli_status_thread(std::atomic<bool>& cancel_flag, std:
 }
 #endif
 
+inline void install_crash_logging() {
+    std::set_terminate([]() {
+        log_error("main.crash", "std::terminate called");
+        std::_Exit(134);
+    });
+    std::signal(SIGABRT, [](int sig) {
+        log_error("main.crash", "signal=" + std::to_string(sig));
+        std::_Exit(128 + sig);
+    });
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(log_unhandled_exception);
+#endif
+}
+
 inline void handle_result(const GenerateRunResult& result, const GenerateRunConfig& cfg) {
+    const auto audit_summary = logic::GenericLogicCertify::build_audit_summary();
     std::cout << "\n=== Generation Summary ===\n";
     std::cout << "Accepted: " << result.accepted << "\n";
     std::cout << "Written: " << result.written << "\n";
     std::cout << "Attempts: " << result.attempts << "\n";
+    if (cfg.required_strategy != RequiredStrategy::None) {
+        std::cout << "Required strategy: " << to_string(cfg.required_strategy) << "\n";
+        std::cout << "Required strategy use (certifier): "
+                  << result.certifier_required_strategy_use << "\n";
+        std::cout << "Required strategy hit (certifier): "
+                  << result.certifier_required_strategy_hit << "\n";
+        std::cout << "Required strategy analyzed (certifier): "
+                  << result.certifier_required_strategy_analyzed << "\n";
+        std::cout << "Required strategy use/hit (certifier): "
+                  << result.certifier_required_strategy_use << "/"
+                  << result.certifier_required_strategy_hit << "\n";
+        std::cout << "MCTS required use/hit: "
+                  << result.mcts_required_strategy_use << "/"
+                  << result.mcts_required_strategy_hit << "\n";
+        std::cout << "MCTS required analyzed: "
+                  << result.mcts_required_strategy_analyzed << "\n";
+    }
     std::cout << "Rejected: " << result.rejected << "\n";
+    std::cout << "Measurement profile: " << result.measurement_profile << "\n";
+    std::cout << "Effective clue range: " << result.effective_min_clues << "-" << result.effective_max_clues << "\n";
     std::cout << "  - Prefilter: " << result.reject_prefilter << "\n";
     std::cout << "  - Logic: " << result.reject_logic << "\n";
     std::cout << "  - Uniqueness: " << result.reject_uniqueness << "\n";
-    std::cout << "  - Strategy: " << result.reject_strategy << "\n";
+    std::cout << "  - StrategyStageRejects: " << result.reject_strategy << "\n";
     std::cout << "  - Replay: " << result.reject_replay << "\n";
     std::cout << "  - DistributionBias: " << result.reject_distribution_bias << "\n";
     std::cout << "  - UniquenessBudget: " << result.reject_uniqueness_budget << "\n";
@@ -119,8 +169,27 @@ inline void handle_result(const GenerateRunResult& result, const GenerateRunConf
     std::cout << "Naked hit/use: " << result.strategy_naked_hit << "/" << result.strategy_naked_use << "\n";
     std::cout << "Hidden hit/use: " << result.strategy_hidden_hit << "/" << result.strategy_hidden_use << "\n";
     std::cout << "MCTS advanced evals: " << result.mcts_advanced_evals << "\n";
-    std::cout << "MCTS required analyzed: " << result.mcts_required_strategy_analyzed << "\n";
-    std::cout << "MCTS required hit/use: " << result.mcts_required_strategy_hit << "/" << result.mcts_required_strategy_use << "\n";
+    if (cfg.required_strategy != RequiredStrategy::None) {
+        std::cout << "Certifier required analyzed/use/hit: "
+                  << result.certifier_required_strategy_analyzed << "/"
+                  << result.certifier_required_strategy_use << "/"
+                  << result.certifier_required_strategy_hit << "\n";
+    }
+    std::cout << "Pattern exact template used: " << result.pattern_exact_template_used << "\n";
+    std::cout << "Pattern family fallback used: " << result.pattern_family_fallback_used << "\n";
+    std::cout << "Required exact contract met: " << result.required_strategy_exact_contract_met << "\n";
+    std::cout << "Strategy audit canonical full: " << audit_summary.canonical_full << "/" << audit_summary.total_slots << "\n";
+    std::cout << "Strategy audit tighten/rewrite/missing: "
+              << audit_summary.tighten << "/" << audit_summary.rewrite << "/" << audit_summary.exact_template_missing << "\n";
+    std::cout << "Strategy audit parser/certifier/generator exact/fallback/smoke: "
+              << audit_summary.parser_selectable << "/"
+              << audit_summary.certifier_wired << "/"
+              << audit_summary.generator_exact_template_wired << "/"
+              << audit_summary.generator_family_fallback_wired << "/"
+              << audit_summary.smoke_profile_present << "\n";
+    std::cout << "Strategy audit family-fallback-only / exact-required-missing: "
+              << audit_summary.family_fallback_only << "/"
+              << audit_summary.exact_required_but_missing << "\n";
     std::cout << "VIP score: " << std::fixed << std::setprecision(3) << result.vip_score << "\n";
     std::cout << "VIP grade: " << result.vip_grade << "\n";
     std::cout << "VIP contract: " << (result.vip_contract_ok ? "ok" : "fail") << "\n";
@@ -163,6 +232,7 @@ inline void print_production_help(std::ostream& out) {
     out << "  --max-pattern-depth <0..8>      Cap advanced pattern depth (0=auto)\n";
     out << "  --fast-test                     Fast smoke mode (relaxed contracts, short budgets)\n";
     out << "  --max-total-time-s <uint64>     Global runtime timeout (0=none)\n";
+    out << "  --run-quality-benchmark <file>  Write strategy audit report (.txt + .csv)\n";
     out << "  --list-geometries               Print supported geometries\n";
     out << "  --validate-geometry             Validate current --box-rows/--box-cols\n";
     out << "  --validate-geometry-catalog     Validate full geometry catalog\n";
@@ -179,102 +249,151 @@ inline void print_production_help(std::ostream& out) {
 int main(int argc, char** argv) {
     using namespace sudoku_hpc;
 
-    log_info("main", "program start");
-    std::cout << "Debug log file: " << debug_logger().path() << "\n";
-    std::cout << "Author copyright Marcin Matysek (Rewertyn)\n";
-    std::cout << "Seed type: uint64_t\n";
+    install_crash_logging();
 
-    if (has_arg(argc, argv, "--help") || has_arg(argc, argv, "-h") || has_arg(argc, argv, "/?")) {
-        print_production_help(std::cout);
-        return 0;
-    }
+    try {
+        log_info("main", "program start");
+        std::cout << "Debug log file: " << debug_logger().path() << "\n";
+        std::cout << "Author copyright Marcin Matysek (Rewertyn)\n";
+        std::cout << "Seed type: uint64_t\n";
 
-#ifdef _WIN32
-    const bool force_gui = has_arg(argc, argv, "--gui");
-    const bool force_cli = has_arg(argc, argv, "--cli");
-    const bool force_console = has_arg(argc, argv, "--force-console");
-    if ((argc == 1 || force_gui) && !force_cli) {
-        log_info("main", "starting GUI mode");
-        if (force_console) {
-            ensure_console_attached();
+        if (has_arg(argc, argv, "--help") || has_arg(argc, argv, "-h") || has_arg(argc, argv, "/?")) {
+            print_production_help(std::cout);
+            return 0;
         }
-        return run_gui_winapi(GetModuleHandleW(nullptr));
-    }
-#endif
-
-    ParseArgsResult parse_result = parse_args(argc, argv);
-    GenerateRunConfig cfg = parse_result.cfg;
-
-    if (parse_result.list_geometries) {
-        std::cout << supported_geometries_text();
-        return 0;
-    }
-    if (parse_result.validate_geometry) {
-        const bool ok = print_geometry_validation(cfg.box_rows, cfg.box_cols, std::cout);
-        return ok ? 0 : 1;
-    }
-    if (parse_result.validate_geometry_catalog) {
-        const bool ok = print_geometry_catalog_validation(std::cout);
-        return ok ? 0 : 1;
-    }
-
-    if (parse_result.explain_profile) {
-        std::cout << explain_generation_profile_text(cfg);
-        return 0;
-    }
-
-    if (parse_result.run_regression_tests ||
-        parse_result.run_geometry_gate ||
-        parse_result.run_quality_benchmark ||
-        parse_result.run_pre_difficulty_gate ||
-        parse_result.run_asym_pair_benchmark ||
-        parse_result.run_vip_benchmark ||
-        parse_result.run_vip_gate ||
-        cfg.stage_start || cfg.stage_end || cfg.perf_ab_suite ||
-        parse_result.benchmark_mode) {
-        std::cout << "Selected maintenance mode is not wired in this runtime build yet. "
-                  << "Running normal generation with provided config.\n";
-    }
-
-    std::atomic<bool> cancel_flag{false};
-    std::atomic<bool> pause_flag{false};
 
 #ifdef _WIN32
-    std::jthread cli_hotkeys_thread;
-    std::jthread cli_status_thread;
-    if (can_use_cli_hotkeys()) {
-        print_cli_hotkeys_help();
-        cli_hotkeys_thread = start_cli_hotkeys_thread(cancel_flag, pause_flag);
-        cli_status_thread = start_cli_status_thread(cancel_flag, pause_flag);
-    }
+        const bool force_gui = has_arg(argc, argv, "--gui");
+        const bool force_cli = has_arg(argc, argv, "--cli");
+        const bool force_console = has_arg(argc, argv, "--force-console");
+        if ((argc == 1 || force_gui) && !force_cli) {
+            log_info("main", "starting GUI mode");
+            if (force_console) {
+                ensure_console_attached();
+            }
+            return run_gui_winapi(GetModuleHandleW(nullptr));
+        }
 #endif
 
-    ConsoleStatsMonitor monitor;
-    monitor.start_ui_thread(5000);
+        ParseArgsResult parse_result = parse_args(argc, argv);
+        GenerateRunConfig cfg = parse_result.cfg;
+        log_info(
+            "main",
+            "parsed_args geom=" + std::to_string(cfg.box_rows) + "x" + std::to_string(cfg.box_cols) +
+            " difficulty=" + std::to_string(cfg.difficulty_level_required) +
+            " required=" + to_string(cfg.required_strategy) +
+            " target=" + std::to_string(cfg.target_puzzles) +
+            " threads=" + std::to_string(cfg.threads) +
+            " fast_test=" + std::string(cfg.fast_test_mode ? "1" : "0"));
 
-    auto result = run_generic_sudoku(
-        cfg,
-        &monitor,
-        &cancel_flag,
-        &pause_flag,
-        nullptr,
-        [&](const std::string& msg) {
-            std::cout << msg << "\n";
-        });
+        if (parse_result.list_geometries) {
+            std::cout << supported_geometries_text();
+            return 0;
+        }
+        if (parse_result.validate_geometry) {
+            const bool ok = print_geometry_validation(cfg.box_rows, cfg.box_cols, std::cout);
+            return ok ? 0 : 1;
+        }
+        if (parse_result.validate_geometry_catalog) {
+            const bool ok = print_geometry_catalog_validation(std::cout);
+            return ok ? 0 : 1;
+        }
 
-    monitor.stop_ui_thread();
+        if (parse_result.explain_profile) {
+            std::cout << explain_generation_profile_text(cfg);
+            return 0;
+        }
+
+        if (parse_result.run_quality_benchmark) {
+            std::string csv_path;
+            const bool ok = maintenance::write_quality_benchmark_report(
+                parse_result.quality_benchmark_report,
+                parse_result.quality_benchmark_max_cases,
+                &csv_path);
+            if (!ok) {
+                std::cerr << "Failed to write quality benchmark report: "
+                          << parse_result.quality_benchmark_report << "\n";
+                return 1;
+            }
+            std::cout << "Quality benchmark text report: " << parse_result.quality_benchmark_report << "\n";
+            std::cout << "Quality benchmark CSV report: " << csv_path << "\n";
+            return 0;
+        }
+
+        if (parse_result.run_regression_tests ||
+            parse_result.run_geometry_gate ||
+            parse_result.run_pre_difficulty_gate ||
+            parse_result.run_asym_pair_benchmark ||
+            parse_result.run_vip_benchmark ||
+            parse_result.run_vip_gate ||
+            cfg.stage_start || cfg.stage_end || cfg.perf_ab_suite ||
+            parse_result.benchmark_mode) {
+            std::cout << "Selected maintenance mode is not wired in this runtime build yet. "
+                      << "Running normal generation with provided config.\n";
+        }
+
+        std::atomic<bool> cancel_flag{false};
+        std::atomic<bool> pause_flag{false};
 
 #ifdef _WIN32
-    if (cli_hotkeys_thread.joinable()) {
-        cli_hotkeys_thread.request_stop();
-        cli_hotkeys_thread.join();
-    }
-    if (cli_status_thread.joinable()) {
-        cli_status_thread.request_stop();
-        cli_status_thread.join();
-    }
+        std::jthread cli_hotkeys_thread;
+        std::jthread cli_status_thread;
+        if (can_use_cli_hotkeys()) {
+            print_cli_hotkeys_help();
+            cli_hotkeys_thread = start_cli_hotkeys_thread(cancel_flag, pause_flag);
+            cli_status_thread = start_cli_status_thread(cancel_flag, pause_flag);
+        }
 #endif
 
-    handle_result(result, cfg);
-    return 0;
+        ConsoleStatsMonitor monitor;
+        monitor.start_ui_thread(5000);
+
+        log_info("main", "run_generic_sudoku begin");
+        std::mutex console_mu;
+        auto result = run_generic_sudoku(
+            cfg,
+            &monitor,
+            &cancel_flag,
+            &pause_flag,
+            nullptr,
+            [&](const std::string& msg) {
+                std::lock_guard<std::mutex> lock(console_mu);
+                std::cout << msg << "\n";
+                std::cout.flush();
+            });
+        log_info("main", "run_generic_sudoku end");
+
+        log_info("main", "monitor stop begin");
+        monitor.stop_ui_thread();
+        log_info("main", "monitor stop end");
+
+#ifdef _WIN32
+        if (cli_hotkeys_thread.joinable()) {
+            log_info("main", "cli_hotkeys join begin");
+            cli_hotkeys_thread.request_stop();
+            cli_hotkeys_thread.join();
+            log_info("main", "cli_hotkeys join end");
+        }
+        if (cli_status_thread.joinable()) {
+            log_info("main", "cli_status join begin");
+            cli_status_thread.request_stop();
+            cli_status_thread.join();
+            log_info("main", "cli_status join end");
+        }
+#endif
+
+        log_info("main", "handle_result begin");
+        handle_result(result, cfg);
+        log_info("main", "handle_result end");
+        log_info("main", "program end ok");
+        return 0;
+    } catch (const std::exception& ex) {
+        log_error("main.exception", ex.what());
+        std::cerr << "Fatal error: " << ex.what() << "\n";
+        return 1;
+    } catch (...) {
+        log_error("main.exception", "unknown");
+        std::cerr << "Fatal error: unknown exception\n";
+        return 1;
+    }
 }

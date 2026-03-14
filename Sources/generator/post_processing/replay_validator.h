@@ -4,6 +4,8 @@
 // Opis: Walidacja rozwiązania po procesie "kopania" (Replay Validation)
 //       oraz sprzętowo optymalizowane (64-bitowe) hashowanie FNV-1a.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

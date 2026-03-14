@@ -4,6 +4,8 @@
 // Opis: Reprezentacja stanu poszukiwań. Zmieniona z wektora na wskaźnik do
 //       pamięci Thread Local Storage. Zapewnia Zero-Allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

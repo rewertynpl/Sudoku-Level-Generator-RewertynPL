@@ -5,6 +5,8 @@
 //       Tworzy zbiór zablokowanych komórek bivalue, inicjując siatkę powiązań.
 //       Zero-allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

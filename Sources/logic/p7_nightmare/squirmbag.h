@@ -5,6 +5,8 @@
 //       Bardzo obciążająca matematycznie kombinatoryka, oparta o rygorystyczne 
 //       bitboardowanie i sprzężone skanowanie (Zero-Allocation).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -18,14 +20,47 @@
 
 namespace sudoku_hpc::logic::p7_nightmare {
 
+inline int squirmbag_active_cap(const CandidateState& st) {
+    const int n = st.topo->n;
+    const int min_progress_phase = (n <= 25) ? (3 * n) : (2 * n);
+    if (n <= 16) return n;
+    if (n <= 25) return std::min(n, 20);
+    if (st.board->empty_cells <= (st.topo->nn - 5 * n)) return std::min(n, 24);
+    return std::min(n, 18);
+}
+
+inline int squirmbag_combo_cap(const CandidateState& st) {
+    const int n = st.topo->n;
+    if (n <= 16) return 50000;
+    if (n <= 25) return 24000;
+    if (n <= 36) return 12000;
+    return 6000;
+}
+
+inline void squirmbag_sort_active_lines(const uint64_t* masks, int* lines, int count) {
+    for (int i = 1; i < count; ++i) {
+        const int line = lines[i];
+        const int weight = std::popcount(masks[line]);
+        int j = i - 1;
+        while (j >= 0) {
+            const int prev_weight = std::popcount(masks[lines[j]]);
+            if (prev_weight <= weight) break;
+            lines[j + 1] = lines[j];
+            --j;
+        }
+        lines[j + 1] = line;
+    }
+}
+
 inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = st.now_ns();
     ++s.use_count;
     const int n = st.topo->n;
+    const int min_progress_phase = (n <= 25) ? (3 * n) : (2 * n);
     
     // Optymalizacja wczesnego wyjścia:
     // Starfish na planszach poniżej 5x5 matematycznie nie ma racji bytu
-    if (n < 5 || n > 25 || st.board->empty_cells > (st.topo->nn - 3 * n)) {
+    if (n < 5 || n > 64 || st.board->empty_cells > (st.topo->nn - min_progress_phase)) {
         s.elapsed_ns += st.now_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -51,7 +86,7 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
         int col_count = 0;
         
         // Zbieramy użyteczne linie (takie gdzie ryba w ogóle ma sens)
-        const int active_cap = std::min(n, 14);
+        const int active_cap = squirmbag_active_cap(st);
         for (int rr = 0; rr < n; ++rr) {
             const int cnt = std::popcount(sp.fish_row_masks[rr]);
             if (cnt >= 2 && cnt <= 5 && row_count < active_cap) sp.active_rows[row_count++] = rr;
@@ -61,6 +96,11 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
             if (cnt >= 2 && cnt <= 5 && col_count < active_cap) sp.active_cols[col_count++] = cc;
         }
         if (row_count < 5 && col_count < 5) continue;
+
+        squirmbag_sort_active_lines(sp.fish_row_masks, sp.active_rows, row_count);
+        squirmbag_sort_active_lines(sp.fish_col_masks, sp.active_cols, col_count);
+        int combo_checks = 0;
+        const int combo_cap = squirmbag_combo_cap(st);
 
         // ====================================================================
         // Faza 1: Szukanie po rzędach (Row-based Squirmbag / Starfish)
@@ -85,6 +125,7 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                         if (std::popcount(u4) > 5) continue;
                         
                         for (int m = l + 1; m < row_count; ++m) {
+                            if (++combo_checks > combo_cap) break;
                             const int r5 = sp.active_rows[m];
                             const uint64_t cols_union = u4 | sp.fish_row_masks[r5];
                             
@@ -96,7 +137,7 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                                 const int cc = config::bit_ctz_u64(w);
                                 for (int rr = 0; rr < n; ++rr) {
                                     if (rr == r1 || rr == r2 || rr == r3 || rr == r4 || rr == r5) continue;
-                                    
+                                    if ((st.cands[rr * n + cc] & bit) == 0ULL) continue;
                                     const ApplyResult er = st.eliminate(rr * n + cc, bit);
                                     if (er == ApplyResult::Contradiction) { 
                                         s.elapsed_ns += st.now_ns() - t0; 
@@ -111,9 +152,13 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                                 }
                             }
                         }
+                        if (combo_checks > combo_cap) break;
                     }
+                    if (combo_checks > combo_cap) break;
                 }
+                if (combo_checks > combo_cap) break;
             }
+            if (combo_checks > combo_cap) break;
         }
 
         // ====================================================================
@@ -139,6 +184,7 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                         if (std::popcount(u4) > 5) continue;
                         
                         for (int m = l + 1; m < col_count; ++m) {
+                            if (++combo_checks > combo_cap) break;
                             const int c5 = sp.active_cols[m];
                             const uint64_t rows_union = u4 | sp.fish_col_masks[c5];
                             
@@ -148,7 +194,7 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                                 const int rr = config::bit_ctz_u64(w);
                                 for (int cc = 0; cc < n; ++cc) {
                                     if (cc == c1 || cc == c2 || cc == c3 || cc == c4 || cc == c5) continue;
-                                    
+                                    if ((st.cands[rr * n + cc] & bit) == 0ULL) continue;
                                     const ApplyResult er = st.eliminate(rr * n + cc, bit);
                                     if (er == ApplyResult::Contradiction) { 
                                         s.elapsed_ns += st.now_ns() - t0; 
@@ -163,9 +209,13 @@ inline ApplyResult apply_squirmbag(CandidateState& st, StrategyStats& s, Generic
                                 }
                             }
                         }
+                        if (combo_checks > combo_cap) break;
                     }
+                    if (combo_checks > combo_cap) break;
                 }
+                if (combo_checks > combo_cap) break;
             }
+            if (combo_checks > combo_cap) break;
         }
     }
 

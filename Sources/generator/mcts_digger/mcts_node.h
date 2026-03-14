@@ -1,30 +1,32 @@
 // ============================================================================
 // SUDOKU HPC - MCTS DIGGER
-// Moduł: mcts_node.h
-// Opis: Reprezentuje węzeł drzewa Monte Carlo. Prealokowany w TLS.
-//       Służy do oceny "wartości" usunięcia konkretnej komórki (reward).
+// Module: mcts_node.h
+// Description: Thread-local MCTS scratch with flat buffers sized for N <= 64.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
-#include <vector>
 
 namespace sudoku_hpc::mcts_digger {
 
-// Struktura bufora przetrzymująca statystyki na danym etapie poszukiwań
-// Utrzymuje do MAX_NN komórek jako dostępne akcje (usunięcia).
 struct MctsNodeScratch {
+    static constexpr int MAX_N = 64;
+    static constexpr int MAX_NN = MAX_N * MAX_N;
+
     int prepared_nn = 0;
-    
-    // Tablice równoległe (SoA) zastępujące alokowane węzły
-    std::vector<double> reward_sum;
-    std::vector<double> prior_bonus;
-    std::vector<uint32_t> visits;
-    std::vector<int> active_cells;
-    std::vector<int> active_pos; // Mapowanie: O(1) index w active_cells dla danej komórki
-    
+
+    // Fixed SoA storage removes heap churn from the digger hot path.
+    std::array<double, MAX_NN> reward_sum{};
+    std::array<double, MAX_NN> prior_bonus{};
+    std::array<uint32_t, MAX_NN> visits{};
+    std::array<int, MAX_NN> active_cells{};
+    std::array<int, MAX_NN> active_pos{};
+
     int active_count = 0;
     uint64_t total_visits = 0;
 
@@ -32,11 +34,17 @@ struct MctsNodeScratch {
         if (prepared_nn == nn) {
             return;
         }
-        reward_sum.assign(static_cast<size_t>(nn), 0.0);
-        prior_bonus.assign(static_cast<size_t>(nn), 0.0);
-        visits.assign(static_cast<size_t>(nn), 0U);
-        active_cells.assign(static_cast<size_t>(nn), -1);
-        active_pos.assign(static_cast<size_t>(nn), -1);
+        if (nn < 0) {
+            nn = 0;
+        }
+        if (nn > MAX_NN) {
+            nn = MAX_NN;
+        }
+        std::fill_n(reward_sum.data(), nn, 0.0);
+        std::fill_n(prior_bonus.data(), nn, 0.0);
+        std::fill_n(visits.data(), nn, 0U);
+        std::fill_n(active_cells.data(), nn, -1);
+        std::fill_n(active_pos.data(), nn, -1);
         prepared_nn = nn;
         active_count = 0;
         total_visits = 0;
@@ -44,29 +52,28 @@ struct MctsNodeScratch {
 
     void reset(int nn) {
         ensure(nn);
-        std::fill(reward_sum.begin(), reward_sum.end(), 0.0);
-        std::fill(prior_bonus.begin(), prior_bonus.end(), 0.0);
-        std::fill(visits.begin(), visits.end(), 0U);
-        std::fill(active_pos.begin(), active_pos.end(), -1);
+        std::fill_n(reward_sum.data(), prepared_nn, 0.0);
+        std::fill_n(prior_bonus.data(), prepared_nn, 0.0);
+        std::fill_n(visits.data(), prepared_nn, 0U);
+        std::fill_n(active_cells.data(), prepared_nn, -1);
+        std::fill_n(active_pos.data(), prepared_nn, -1);
         active_count = 0;
         total_visits = 0;
     }
 
-    // Aktywuje komórkę jako możliwy cel usunięcia ("odnoga" w drzewie)
     void activate(int cell) {
         if (cell < 0 || cell >= prepared_nn) {
             return;
         }
         if (active_pos[static_cast<size_t>(cell)] >= 0) {
-            return; // Już aktywna
+            return;
         }
-        
+
         const int pos = active_count++;
         active_cells[static_cast<size_t>(pos)] = cell;
         active_pos[static_cast<size_t>(cell)] = pos;
     }
 
-    // Usuwa komórkę z dostępnych odnóg w O(1) swap_and_pop
     void disable(int cell) {
         if (cell < 0 || cell >= prepared_nn) {
             return;
@@ -75,23 +82,20 @@ struct MctsNodeScratch {
         if (pos < 0 || pos >= active_count) {
             return;
         }
-        
+
         const int last_pos = active_count - 1;
         const int last_cell = active_cells[static_cast<size_t>(last_pos)];
-        
-        // Zastąpienie usuwanego elementu ostatnim elementem
+
         active_cells[static_cast<size_t>(pos)] = last_cell;
         if (last_cell >= 0) {
             active_pos[static_cast<size_t>(last_cell)] = pos;
         }
-        
-        // Wyczyszczenie ogona
+
         active_cells[static_cast<size_t>(last_pos)] = -1;
         active_pos[static_cast<size_t>(cell)] = -1;
         --active_count;
     }
 
-    // Aktualizacja statystyk węzła na podstawie sygnału z Backpropagation
     void update(int cell, double reward) {
         if (cell < 0 || cell >= prepared_nn) {
             return;
@@ -109,9 +113,8 @@ struct MctsNodeScratch {
     }
 };
 
-// TLS dostęp (Gwarancja uniknięcia alokacji w głównej pętli MCTS Diggera)
 inline MctsNodeScratch& tls_mcts_node_scratch() {
-    thread_local MctsNodeScratch s{};
+    thread_local MctsNodeScratch s;
     return s;
 }
 

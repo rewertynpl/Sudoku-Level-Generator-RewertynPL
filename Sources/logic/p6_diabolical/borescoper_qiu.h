@@ -6,6 +6,8 @@
 //       SÄ… to zĹ‚oĹĽone ukĹ‚ady 4 wierzchoĹ‚kĂłw na rĂłĹĽnych blokach, ktĂłrych 
 //       doprowadzenie do 2 cyfr rujnuje unikalnoĹ›Ä‡ planszy.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

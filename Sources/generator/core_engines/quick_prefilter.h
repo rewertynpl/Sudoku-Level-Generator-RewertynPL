@@ -4,6 +4,8 @@
 // Opis: Błyskawiczny, "brudny" filtr odrzucający siatki przed rygorystyczną
 //       weryfikacją logiczną i MCTS. Zero-allocation, pełne AVX scaling.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

@@ -6,6 +6,8 @@
 //       na krawędzi Deadly Pattern'u, gdy występuje więcej niż jedna komórka 
 //       typu trivalue.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

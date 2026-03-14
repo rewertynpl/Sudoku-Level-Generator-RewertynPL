@@ -5,6 +5,8 @@
 //       Zawiera optymalizacje LUT (Look-Up Table) dla obliczeń logarytmów.
 //       Zero-allocation w gorącej ścieżce wywołań.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -104,8 +106,8 @@ struct QualityScratch {
 };
 
 inline QualityScratch& tls_quality_scratch() {
-    thread_local QualityScratch s{};
-    return s;
+    thread_local QualityScratch* s = new QualityScratch();
+    return *s;
 }
 
 inline QualityMetrics evaluate_quality_metrics(

@@ -4,6 +4,8 @@
 // Description: Direct alternating strong/weak loop search with discontinuity
 // inference (strong-strong => true, weak-weak => false).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
@@ -71,7 +73,7 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
         if (!shared::build_grouped_link_graph_for_digit(st, d, sp)) continue;
         if (sp.dyn_node_count < 3 || sp.dyn_strong_edge_count == 0) continue;
 
-        const int max_depth = std::clamp(8 + st.board->empty_cells / std::max(1, n), 10, 22);
+        const int max_depth = std::clamp(10 + (st.board->empty_cells / std::max(1, n)) + (n / 3), 12, 28);
 
         for (int start = 0; start < sp.dyn_node_count; ++start) {
             const int start_cell = sp.dyn_node_to_cell[start];
@@ -89,6 +91,7 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
                 for (int i = 0; i < first_cnt; ++i) {
                     const int v = neighbors[i];
                     const int state = (v << 1) | first_type; // last edge type used
+                    if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
                     queue[qt] = state;
                     depth[qt] = 1;
                     ++qt;
@@ -138,12 +141,35 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
                         }
 
                         int* vis = (next_type == 0) ? vis_even : vis_odd;
+                        int* vis_other = (next_type == 0) ? vis_odd : vis_even;
+                        if (vis_other[v] != 0 && dep >= 2) {
+                            const int infer_cell = sp.dyn_node_to_cell[v];
+                            ApplyResult er = ApplyResult::NoProgress;
+                            if (next_type == 1) {
+                                if (!st.place(infer_cell, d)) {
+                                    s.elapsed_ns += get_current_time_ns() - t0;
+                                    return ApplyResult::Contradiction;
+                                }
+                                er = ApplyResult::Progress;
+                            } else {
+                                er = st.eliminate(infer_cell, bit);
+                                if (er == ApplyResult::Contradiction) {
+                                    s.elapsed_ns += get_current_time_ns() - t0;
+                                    return er;
+                                }
+                            }
+                            if (er == ApplyResult::Progress) {
+                                any_progress = true;
+                                inferred = true;
+                                break;
+                            }
+                        }
                         if (vis[v] != 0) continue;
                         vis[v] = 1;
+                        if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
                         queue[qt] = (v << 1) | next_type;
                         depth[qt] = dep + 1;
                         ++qt;
-                        if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
                     }
                 }
             }
@@ -162,4 +188,3 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
 }
 
 } // namespace sudoku_hpc::logic::p7_nightmare
-

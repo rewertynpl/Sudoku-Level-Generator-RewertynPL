@@ -1,0 +1,2708 @@
+// ============================================================================
+// SUDOKU HPC - EXACT PATTERN FORCING
+// Moduł: pattern_planter.h
+// Opis: Menedżer wstrzykiwania wzorców (Planter). Łączy konkretne szablony,
+//       alokuje struktury na stosie w TLS i eksponuje widok (SeedView).
+// ============================================================================
+//Author co
+pyright Marcin Matysek (Rewertyn)
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <random>
+#include <vector>
+
+// Core 
+#include "../../core/board.h"
+#include "../../config/run_config.h"
+
+// Specyficzne szablony
+#include "template_exocet.h"
+#include "template_sk_loop.h"
+#include "template_forcing.h"
+#include "template_msls_overlay.h"
+#include "template_p6_exact.h"
+
+namespace sudoku_hpc::pattern_forcing {
+
+// Typy wzorców (do losowych "luźnych" kotwic)
+enum class PatternKind : uint8_t {
+    None = 0,
+    Chain,
+    ExocetLike,
+    LoopLike,
+    ForcingLike,
+    ColorLike,
+    PetalLike,
+    IntersectionLike,
+    FishLike,
+    FrankenLike,
+    MutantLike,
+    SquirmLike,
+    AlsLike,
+    ExclusionLike,
+    AicLike,
+    GroupedAicLike,
+    GroupedCycleLike,
+    NiceLoopLike,
+    XChainLike,
+    XYChainLike,
+    EmptyRectangleLike,
+    RemotePairsLike,
+    SwordfishLike,
+    JellyfishLike,
+    FinnedFishLike
+};
+
+enum class PatternMutationSource : uint8_t {
+    Random = 0,
+    Last,
+    Best
+};
+
+// Mapowanie z flagi w main()
+enum class TargetPattern : uint8_t {
+    None = 0,
+    XChain,
+    XYChain,
+    Exocet,
+    MSLS
+};
+
+// Bezpieczny widok przekazywany na zewnątrz bez kopiowania wektorów
+struct PatternSeedView {
+    PatternKind kind = PatternKind::None;
+    const std::vector<uint16_t>* seed_puzzle = nullptr;
+    const std::vector<uint64_t>* allowed_masks = nullptr;
+    const std::vector<uint8_t>* protected_cells = nullptr;
+    const int* anchor_idx = nullptr;
+    const uint64_t* anchor_masks = nullptr;
+    int anchor_count = 0;
+    bool exact_template = false;
+    int template_score = 0;
+    int best_template_score = 0;
+    int template_score_delta = 0;
+    int mutation_strength = 0;
+    int planner_zero_use_streak = 0;
+    int planner_failure_streak = 0;
+    int adaptive_target_strength = 0;
+    PatternMutationSource mutation_source = PatternMutationSource::Random;
+};
+
+// Bufor współdzielony dla każdego wątku (Thread Local Storage)
+// Gwarantuje ZERO-ALLOC podczas wielokrotnego generowania masek.
+struct PatternScratch {
+    int prepared_nn = 0;
+    std::vector<uint16_t> seed_puzzle;
+    std::vector<uint64_t> allowed_masks;
+    std::vector<uint8_t> protected_cells;
+    std::array<int, 64> anchors{};
+    std::array<uint64_t, 64> anchor_masks{};
+    int anchor_count = 0;
+    bool exact_template = false;
+    int template_score = 0;
+
+    void ensure(const GenericTopology& topo) {
+        if (prepared_nn != topo.nn) {
+            seed_puzzle.assign(static_cast<size_t>(topo.nn), 0);
+            allowed_masks.assign(static_cast<size_t>(topo.nn), 0ULL);
+            protected_cells.assign(static_cast<size_t>(topo.nn), 0);
+            prepared_nn = topo.nn;
+        }
+    }
+
+    void reset(const GenericTopology& topo) {
+        ensure(topo);
+        std::fill(seed_puzzle.begin(), seed_puzzle.end(), 0);
+        const uint64_t full = pf_full_mask_for_n(topo.n);
+        std::fill(allowed_masks.begin(), allowed_masks.end(), full);
+        std::fill(protected_cells.begin(), protected_cells.end(), static_cast<uint8_t>(0));
+        std::fill(anchor_masks.begin(), anchor_masks.end(), 0ULL);
+        anchor_count = 0;
+        exact_template = false;
+        template_score = 0;
+    }
+
+    bool add_anchor(int idx) {
+        if (idx < 0 || idx >= prepared_nn) return false;
+        // Zabezpieczenie przed duplikatami
+        for (int i = 0; i < anchor_count; ++i) {
+            if (anchors[static_cast<size_t>(i)] == idx) return false;
+        }
+        if (anchor_count >= static_cast<int>(anchors.size())) return false;
+        anchors[static_cast<size_t>(anchor_count++)] = idx;
+        return true;
+    }
+};
+
+inline PatternScratch& tls_pattern_scratch() {
+    thread_local PatternScratch* s = new PatternScratch();
+    return *s;
+}
+
+inline void protect_pattern_cells_from_masks(
+    const GenericTopology& topo,
+    PatternScratch& sc) {
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    for (int idx = 0; idx < topo.nn; ++idx) {
+        const uint64_t mask = sc.allowed_masks[static_cast<size_t>(idx)];
+        if ((mask != 0ULL && mask != full) || sc.seed_puzzle[static_cast<size_t>(idx)] != 0U) {
+            sc.protected_cells[static_cast<size_t>(idx)] = 1;
+        }
+    }
+}
+
+inline uint64_t truncate_mask_bits(uint64_t mask, int keep_bits) {
+    if (mask == 0ULL || keep_bits <= 0) return mask;
+    if (std::popcount(mask) <= keep_bits) return mask;
+    uint64_t out = 0ULL;
+    for (int kept = 0; kept < keep_bits && mask != 0ULL; ++kept) {
+        const int bit = std::countr_zero(mask);
+        out |= (1ULL << bit);
+        mask &= (mask - 1ULL);
+    }
+    return out;
+}
+
+inline uint64_t exact_family_core_mask(
+    const ExactPatternTemplatePlan& plan,
+    int begin_idx,
+    int end_idx) {
+    uint64_t core = 0ULL;
+    for (int i = begin_idx; i < end_idx; ++i) {
+        const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)];
+        core = (core == 0ULL) ? mask : (core & mask);
+    }
+    return core;
+}
+
+inline void expand_exact_template_skeleton(
+    const GenericTopology& topo,
+    PatternKind kind,
+    ExactPatternTemplatePlan& plan) {
+    if (!plan.valid || plan.anchor_count <= 0) return;
+
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    const int n = topo.n;
+
+    int base_core = 0;
+    int core_count = 0;
+    int extra_cap = 8;
+    int keep_bits = 3;
+
+    switch (kind) {
+    case PatternKind::ExocetLike:
+        core_count = std::min(plan.anchor_count, 4);
+        extra_cap = 14;
+        keep_bits = 3;
+        break;
+    case PatternKind::LoopLike:
+        core_count = std::min(plan.anchor_count, 4);
+        extra_cap = 12;
+        keep_bits = 3;
+        break;
+    case PatternKind::ForcingLike:
+    case PatternKind::AicLike:
+    case PatternKind::GroupedAicLike:
+    case PatternKind::GroupedCycleLike:
+    case PatternKind::NiceLoopLike:
+    case PatternKind::XChainLike:
+    case PatternKind::XYChainLike:
+    case PatternKind::EmptyRectangleLike:
+    case PatternKind::RemotePairsLike:
+        core_count = std::min(plan.anchor_count, 4);
+        extra_cap = 10;
+        keep_bits = 3;
+        break;
+    case PatternKind::ColorLike:
+        core_count = std::min(plan.anchor_count, 6);
+        extra_cap = 10;
+        keep_bits = 3;
+        break;
+    case PatternKind::PetalLike:
+        core_count = std::min(plan.anchor_count, 4);
+        extra_cap = 10;
+        keep_bits = 3;
+        break;
+    case PatternKind::IntersectionLike:
+        core_count = std::min(plan.anchor_count, 6);
+        extra_cap = 12;
+        keep_bits = 4;
+        break;
+    case PatternKind::FishLike:
+    case PatternKind::FrankenLike:
+    case PatternKind::MutantLike:
+    case PatternKind::SquirmLike:
+    case PatternKind::SwordfishLike:
+    case PatternKind::JellyfishLike:
+    case PatternKind::FinnedFishLike:
+        core_count = std::min(plan.anchor_count, 6);
+        extra_cap = 12;
+        keep_bits = 3;
+        break;
+    case PatternKind::AlsLike:
+        core_count = std::min(plan.anchor_count, 4);
+        extra_cap = 10;
+        keep_bits = 4;
+        break;
+    case PatternKind::ExclusionLike:
+        core_count = std::min(plan.anchor_count, 3);
+        extra_cap = 8;
+        keep_bits = 3;
+        break;
+    default:
+        core_count = std::min(plan.anchor_count, 4);
+        break;
+    }
+
+    for (int i = 0; i < core_count; ++i) {
+        plan.add_skeleton(
+            plan.anchor_idx[static_cast<size_t>(i)],
+            plan.anchor_masks[static_cast<size_t>(i)] & full);
+    }
+
+    base_core = exact_family_core_mask(plan, 0, std::max(core_count, 1));
+    if (base_core == 0ULL) {
+        for (int i = 0; i < core_count; ++i) {
+            base_core |= truncate_mask_bits(plan.anchor_masks[static_cast<size_t>(i)], keep_bits);
+        }
+        base_core = truncate_mask_bits(base_core, keep_bits);
+    }
+    if (base_core == 0ULL) base_core = truncate_mask_bits(plan.anchor_masks[0], keep_bits);
+
+    int row_count[64]{};
+    int col_count[64]{};
+    int box_count[64]{};
+    uint64_t row_union[64]{};
+    uint64_t col_union[64]{};
+    uint64_t box_union[64]{};
+
+    for (int i = 0; i < core_count; ++i) {
+        const int idx = plan.anchor_idx[static_cast<size_t>(i)];
+        const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)] & full;
+        const int row = topo.cell_row[static_cast<size_t>(idx)];
+        const int col = topo.cell_col[static_cast<size_t>(idx)];
+        const int box = topo.cell_box[static_cast<size_t>(idx)];
+        ++row_count[row];
+        ++col_count[col];
+        ++box_count[box];
+        row_union[row] |= mask;
+        col_union[col] |= mask;
+        box_union[box] |= mask;
+    }
+
+    int added = 0;
+    for (int pass = 0; pass < 2 && added < extra_cap; ++pass) {
+        const int need_houses = (pass == 0) ? 2 : 1;
+        for (int idx = 0; idx < topo.nn && added < extra_cap; ++idx) {
+            if (plan.find_anchor(idx) >= 0 || plan.find_skeleton(idx) >= 0) continue;
+
+            const int row = topo.cell_row[static_cast<size_t>(idx)];
+            const int col = topo.cell_col[static_cast<size_t>(idx)];
+            const int box = topo.cell_box[static_cast<size_t>(idx)];
+
+            int active_houses = 0;
+            uint64_t mask = 0ULL;
+
+            if (row_count[row] >= 2) {
+                ++active_houses;
+                mask |= truncate_mask_bits(row_union[row] | base_core, keep_bits);
+            }
+            if (col_count[col] >= 2) {
+                ++active_houses;
+                mask |= truncate_mask_bits(col_union[col] | base_core, keep_bits);
+            }
+            if (box_count[box] >= 2) {
+                ++active_houses;
+                mask |= truncate_mask_bits(box_union[box] | base_core, keep_bits);
+            }
+
+            if (active_houses < need_houses) continue;
+            mask &= full;
+            mask = truncate_mask_bits(mask, keep_bits);
+            if (mask == 0ULL || mask == full || std::popcount(mask) < 2) continue;
+            if (plan.add_skeleton(idx, mask)) ++added;
+        }
+    }
+}
+
+inline void protect_exact_template_skeleton(
+    PatternScratch& sc,
+    const ExactPatternTemplatePlan& plan) {
+    for (int i = 0; i < plan.skeleton_count; ++i) {
+        const int idx = plan.skeleton_idx[static_cast<size_t>(i)];
+        if (idx < 0 || idx >= sc.prepared_nn) continue;
+        sc.protected_cells[static_cast<size_t>(idx)] = 1;
+    }
+}
+
+struct PatternMutationState {
+    RequiredStrategy strategy = RequiredStrategy::None;
+    PatternKind kind = PatternKind::None;
+    bool have_last = false;
+    bool have_best = false;
+    ExactPatternTemplatePlan last_plan{};
+    ExactPatternTemplatePlan best_plan{};
+    int last_score = -1;
+    int best_score = -1;
+    int failure_streak = 0;
+    int zero_use_streak = 0;
+
+    void reset(RequiredStrategy rs, PatternKind pk) {
+        strategy = rs;
+        kind = pk;
+        have_last = false;
+        have_best = false;
+        last_plan = {};
+        best_plan = {};
+        last_score = -1;
+        best_score = -1;
+        failure_streak = 0;
+        zero_use_streak = 0;
+    }
+};
+
+inline PatternMutationState& tls_pattern_mutation_state() {
+    thread_local PatternMutationState* s = new PatternMutationState();
+    return *s;
+}
+
+// Funkcja pomocnicza - zwraca maskę złożoną z `want` unikalnych losowych cyfr
+inline uint64_t random_digit_mask(int n, int want, std::mt19937_64& rng) {
+    if (n <= 0) return 0ULL;
+    const int k = std::clamp(want, 1, n);
+    uint64_t m = 0ULL;
+    int placed = 0;
+    int guard = 0;
+    while (placed < k && guard < n * 8) {
+        ++guard;
+        const int d0 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+        const uint64_t bit = 1ULL << d0;
+        if ((m & bit) != 0ULL) continue;
+        m |= bit;
+        ++placed;
+    }
+    if (m == 0ULL) {
+        const int d0 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+        m = (1ULL << d0);
+    }
+    return m;
+}
+
+inline PatternKind pick_kind(RequiredStrategy required, int level) {
+    switch (required) {
+    case RequiredStrategy::Exocet:
+    case RequiredStrategy::SeniorExocet:
+        return PatternKind::ExocetLike;
+    case RequiredStrategy::Medusa3D:
+        return PatternKind::ColorLike;
+    case RequiredStrategy::DeathBlossom:
+        return PatternKind::PetalLike;
+    case RequiredStrategy::SueDeCoq:
+        return PatternKind::IntersectionLike;
+    case RequiredStrategy::KrakenFish:
+        return PatternKind::FishLike;
+    case RequiredStrategy::FrankenFish:
+        return PatternKind::FrankenLike;
+    case RequiredStrategy::MutantFish:
+        return PatternKind::MutantLike;
+    case RequiredStrategy::Squirmbag:
+        return PatternKind::SquirmLike;
+    case RequiredStrategy::ALSXYWing:
+    case RequiredStrategy::ALSChain:
+    case RequiredStrategy::ALSAIC:
+        return PatternKind::AlsLike;
+    case RequiredStrategy::AlignedPairExclusion:
+    case RequiredStrategy::AlignedTripleExclusion:
+        return PatternKind::ExclusionLike;
+    case RequiredStrategy::SKLoop:
+    case RequiredStrategy::MSLS:
+    case RequiredStrategy::PatternOverlayMethod:
+        return PatternKind::LoopLike;
+    case RequiredStrategy::AIC:
+        return PatternKind::AicLike;
+    case RequiredStrategy::GroupedAIC:
+        return PatternKind::GroupedAicLike;
+    case RequiredStrategy::GroupedXCycle:
+        return PatternKind::GroupedCycleLike;
+    case RequiredStrategy::ContinuousNiceLoop:
+        return PatternKind::NiceLoopLike;
+    case RequiredStrategy::XChain:
+        return PatternKind::XChainLike;
+    case RequiredStrategy::XYChain:
+        return PatternKind::XYChainLike;
+    case RequiredStrategy::ForcingChains:
+    case RequiredStrategy::DynamicForcingChains:
+        return PatternKind::ForcingLike;
+    case RequiredStrategy::Swordfish:
+        return PatternKind::SwordfishLike;
+    case RequiredStrategy::XWing:
+        return PatternKind::SwordfishLike;
+    case RequiredStrategy::Jellyfish:
+        return PatternKind::JellyfishLike;
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+        return PatternKind::FinnedFishLike;
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+        return PatternKind::XChainLike;
+    case RequiredStrategy::EmptyRectangle:
+        return PatternKind::EmptyRectangleLike;
+    case RequiredStrategy::RemotePairs:
+        return PatternKind::RemotePairsLike;
+    case RequiredStrategy::SimpleColoring:
+        return PatternKind::ColorLike;
+    default:
+        break;
+    }
+    if (level >= 8) return PatternKind::ExocetLike;
+    if (level >= 7) return PatternKind::LoopLike;
+    if (level >= 6) return PatternKind::Chain;
+    return PatternKind::None;
+}
+
+inline const char* pattern_kind_label(PatternKind kind) {
+    switch (kind) {
+    case PatternKind::Chain: return "chain";
+    case PatternKind::ExocetLike: return "exocet";
+    case PatternKind::LoopLike: return "loop";
+    case PatternKind::ForcingLike: return "forcing";
+    case PatternKind::ColorLike: return "color";
+    case PatternKind::PetalLike: return "petal";
+    case PatternKind::IntersectionLike: return "intersection";
+    case PatternKind::FishLike: return "fish";
+    case PatternKind::FrankenLike: return "franken";
+    case PatternKind::MutantLike: return "mutant";
+    case PatternKind::SquirmLike: return "squirm";
+    case PatternKind::AlsLike: return "als";
+    case PatternKind::ExclusionLike: return "exclusion";
+    case PatternKind::AicLike: return "aic";
+    case PatternKind::GroupedAicLike: return "groupedaic";
+    case PatternKind::GroupedCycleLike: return "groupedxcycle";
+    case PatternKind::NiceLoopLike: return "continuousniceloop";
+    case PatternKind::XChainLike: return "xchain";
+    case PatternKind::XYChainLike: return "xychain";
+    case PatternKind::EmptyRectangleLike: return "emptyrectangle";
+    case PatternKind::RemotePairsLike: return "remotepairs";
+    case PatternKind::SwordfishLike: return "swordfish";
+    case PatternKind::JellyfishLike: return "jellyfish";
+    case PatternKind::FinnedFishLike: return "finnedfish";
+    case PatternKind::None:
+    default:
+        return "none";
+    }
+}
+
+inline const char* pattern_mutation_source_label(PatternMutationSource source) {
+    switch (source) {
+    case PatternMutationSource::Last: return "last";
+    case PatternMutationSource::Best: return "best";
+    case PatternMutationSource::Random:
+    default:
+        return "random";
+    }
+}
+
+inline int exact_plan_mask_tightness(uint64_t mask) {
+    const int bits = std::popcount(mask);
+    if (bits <= 1) return 8;
+    if (bits == 2) return 6;
+    if (bits == 3) return 4;
+    if (bits == 4) return 2;
+    return 1;
+}
+
+inline int score_generic_exact_plan(
+    const GenericTopology& topo,
+    PatternKind kind,
+    const ExactPatternTemplatePlan& plan) {
+    if (!plan.valid || plan.anchor_count <= 0) return -1;
+
+    int score = plan.anchor_count * 6;
+    uint64_t row_seen = 0ULL;
+    uint64_t col_seen = 0ULL;
+    uint64_t box_seen = 0ULL;
+    int bivalue_count = 0;
+    int trivalue_count = 0;
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int idx = plan.anchor_idx[static_cast<size_t>(i)];
+        const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)];
+        const int bits = std::popcount(mask);
+        score += exact_plan_mask_tightness(mask);
+        if (bits <= 2) ++bivalue_count;
+        else if (bits == 3) ++trivalue_count;
+
+        const int row = topo.cell_row[static_cast<size_t>(idx)];
+        const int col = topo.cell_col[static_cast<size_t>(idx)];
+        const int box = topo.cell_box[static_cast<size_t>(idx)];
+        row_seen |= (row < 64) ? (1ULL << row) : 0ULL;
+        col_seen |= (col < 64) ? (1ULL << col) : 0ULL;
+        box_seen |= (box < 64) ? (1ULL << box) : 0ULL;
+    }
+
+    score += 2 * std::popcount(row_seen);
+    score += 2 * std::popcount(col_seen);
+    score += std::popcount(box_seen);
+
+    if (kind == PatternKind::ExocetLike) score += 12;
+    else if (kind == PatternKind::LoopLike) score += 10;
+    else if (kind == PatternKind::ForcingLike) score += 10;
+    else if (kind == PatternKind::FishLike || kind == PatternKind::FrankenLike ||
+             kind == PatternKind::MutantLike || kind == PatternKind::SquirmLike ||
+             kind == PatternKind::SwordfishLike || kind == PatternKind::JellyfishLike ||
+             kind == PatternKind::FinnedFishLike) score += 11;
+    else if (kind == PatternKind::AicLike || kind == PatternKind::GroupedAicLike ||
+             kind == PatternKind::GroupedCycleLike || kind == PatternKind::NiceLoopLike ||
+             kind == PatternKind::XChainLike || kind == PatternKind::XYChainLike ||
+             kind == PatternKind::EmptyRectangleLike || kind == PatternKind::RemotePairsLike) score += 10;
+    score += 2 * bivalue_count + trivalue_count;
+
+    return score;
+}
+
+inline int score_exocet_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    bool senior_mode) {
+    int score = score_generic_exact_plan(topo, PatternKind::ExocetLike, plan);
+    if (score < 0) return score;
+
+    int base_pair_score = 0;
+    int cross_target_score = 0;
+    int gate_score = 0;
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        if (std::popcount(mi) != 2) continue;
+        const int row_i = topo.cell_row[static_cast<size_t>(ai)];
+        const int col_i = topo.cell_col[static_cast<size_t>(ai)];
+        const int box_i = topo.cell_box[static_cast<size_t>(ai)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const uint64_t mj = plan.anchor_masks[static_cast<size_t>(j)];
+            if (mi != mj || std::popcount(mj) != 2) continue;
+            const int row_j = topo.cell_row[static_cast<size_t>(aj)];
+            const int col_j = topo.cell_col[static_cast<size_t>(aj)];
+            const int box_j = topo.cell_box[static_cast<size_t>(aj)];
+            if (box_i == box_j && row_i != row_j && col_i != col_j) {
+                base_pair_score += 24;
+                const int t1_row = row_i;
+                const int t1_col = col_j;
+                const int t2_row = row_j;
+                const int t2_col = col_i;
+                for (int k = 0; k < plan.anchor_count; ++k) {
+                    const int ak = plan.anchor_idx[static_cast<size_t>(k)];
+                    const uint64_t mk = plan.anchor_masks[static_cast<size_t>(k)];
+                    const int row_k = topo.cell_row[static_cast<size_t>(ak)];
+                    const int col_k = topo.cell_col[static_cast<size_t>(ak)];
+                    if ((row_k == t1_row && col_k == t1_col) || (row_k == t2_row && col_k == t2_col)) {
+                        cross_target_score += (std::popcount(mk) >= 3) ? 8 : 4;
+                    }
+                    if (row_k == row_i && col_k != col_i && col_k != col_j && topo.cell_box[static_cast<size_t>(ak)] != box_i) {
+                        gate_score += 3;
+                    }
+                    if (col_k == col_j && row_k != row_i && row_k != row_j && topo.cell_box[static_cast<size_t>(ak)] != box_j) {
+                        gate_score += 3;
+                    }
+                }
+            }
+        }
+    }
+
+    score += std::min(base_pair_score, 48);
+    score += std::min(cross_target_score, 24);
+    score += std::min(gate_score, senior_mode ? 24 : 16);
+    if (senior_mode && plan.anchor_count >= 6) score += 10;
+    return score;
+}
+
+inline int score_skloop_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::LoopLike, plan);
+    if (score < 0) return score;
+
+    int rectangle_score = 0;
+    int core_score = 0;
+    int exit_score = 0;
+    int wing_score = 0;
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        const int row_i = topo.cell_row[static_cast<size_t>(ai)];
+        const int col_i = topo.cell_col[static_cast<size_t>(ai)];
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const int row_j = topo.cell_row[static_cast<size_t>(aj)];
+            const int col_j = topo.cell_col[static_cast<size_t>(aj)];
+            if (row_i == row_j || col_i == col_j) continue;
+
+            int corners = 0;
+            int bivalue_corners = 0;
+            uint64_t core_mask = 0ULL;
+            for (int k = 0; k < plan.anchor_count; ++k) {
+                const int ak = plan.anchor_idx[static_cast<size_t>(k)];
+                const int row_k = topo.cell_row[static_cast<size_t>(ak)];
+                const int col_k = topo.cell_col[static_cast<size_t>(ak)];
+                if (!((row_k == row_i || row_k == row_j) && (col_k == col_i || col_k == col_j))) continue;
+                ++corners;
+                const uint64_t mk = plan.anchor_masks[static_cast<size_t>(k)];
+                if (std::popcount(mk) == 2) {
+                    ++bivalue_corners;
+                    core_mask = (core_mask == 0ULL) ? mk : (core_mask & mk);
+                } else if (std::popcount(mk) >= 3) {
+                    exit_score += 3;
+                }
+            }
+            if (corners >= 4) rectangle_score += 16;
+            if (bivalue_corners >= 2 && std::popcount(core_mask) >= 2) core_score += 12;
+        }
+    }
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        if (std::popcount(mi) != 3) continue;
+        const int row_i = topo.cell_row[static_cast<size_t>(ai)];
+        const int col_i = topo.cell_col[static_cast<size_t>(ai)];
+        for (int j = 0; j < plan.anchor_count; ++j) {
+            if (i == j) continue;
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const uint64_t mj = plan.anchor_masks[static_cast<size_t>(j)];
+            if (std::popcount(mj) != 2) continue;
+            const int row_j = topo.cell_row[static_cast<size_t>(aj)];
+            const int col_j = topo.cell_col[static_cast<size_t>(aj)];
+            if (row_i == row_j || col_i == col_j) {
+                const uint64_t inter = mi & mj;
+                if (std::popcount(inter) == 2) wing_score += 2;
+            }
+        }
+    }
+
+    score += std::min(rectangle_score, 32);
+    score += std::min(core_score, 24);
+    score += std::min(exit_score, 16);
+    score += std::min(wing_score, 12);
+    return score;
+}
+
+inline int score_msls_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::LoopLike, plan);
+    if (score < 0) return score;
+
+    int row_count[64]{};
+    int col_count[64]{};
+    int box_count[64]{};
+    int row_box_links = 0;
+    int col_box_links = 0;
+    int row_col_links = 0;
+    uint64_t core_mask = ~0ULL;
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int idx = plan.anchor_idx[static_cast<size_t>(i)];
+        ++row_count[static_cast<size_t>(topo.cell_row[static_cast<size_t>(idx)])];
+        ++col_count[static_cast<size_t>(topo.cell_col[static_cast<size_t>(idx)])];
+        ++box_count[static_cast<size_t>(topo.cell_box[static_cast<size_t>(idx)])];
+        core_mask &= plan.anchor_masks[static_cast<size_t>(i)];
+    }
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        const int ar = topo.cell_row[static_cast<size_t>(ai)];
+        const int ac = topo.cell_col[static_cast<size_t>(ai)];
+        const int ab = topo.cell_box[static_cast<size_t>(ai)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const int br = topo.cell_row[static_cast<size_t>(aj)];
+            const int bc = topo.cell_col[static_cast<size_t>(aj)];
+            const int bb = topo.cell_box[static_cast<size_t>(aj)];
+            if (ar == br && ab == bb) row_box_links += 3;
+            if (ac == bc && ab == bb) col_box_links += 3;
+            if (ar == br && ac == bc) row_col_links += 5;
+        }
+    }
+
+    int active_rows = 0;
+    int active_cols = 0;
+    int active_boxes = 0;
+    int compact_rows = 0;
+    int compact_cols = 0;
+    int compact_boxes = 0;
+    for (int i = 0; i < topo.n; ++i) {
+        if (row_count[i] > 0) {
+            ++active_rows;
+            if (row_count[i] >= 2 && row_count[i] <= std::clamp(3 + topo.n / 8, 4, 10)) compact_rows += 4;
+        }
+        if (col_count[i] > 0) {
+            ++active_cols;
+            if (col_count[i] >= 2 && col_count[i] <= std::clamp(3 + topo.n / 8, 4, 10)) compact_cols += 4;
+        }
+        if (box_count[i] > 0) {
+            ++active_boxes;
+            if (box_count[i] >= 2 && box_count[i] <= std::clamp(3 + topo.n / 8, 4, 10)) compact_boxes += 5;
+        }
+    }
+
+    score += std::min(row_box_links, 36);
+    score += std::min(col_box_links, 36);
+    score += std::min(row_col_links, 12);
+    score += std::min(compact_rows + compact_cols + compact_boxes, 36);
+    if (active_rows >= 2) score += 8;
+    if (active_cols >= 2) score += 8;
+    if (active_boxes >= 1) score += 8;
+    score += 3 * std::min(std::popcount(core_mask), 3);
+    return score;
+}
+
+inline int score_forcing_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    bool dynamic_mode) {
+    int score = score_generic_exact_plan(topo, PatternKind::ForcingLike, plan);
+    if (score < 0) return score;
+
+    int bivalue_nodes = 0;
+    int trivalue_nodes = 0;
+    int link_score = 0;
+    int branch_score = 0;
+    int degree_hist[64]{};
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        const int bits = std::popcount(mi);
+        if (bits == 2) ++bivalue_nodes;
+        else if (bits == 3) ++trivalue_nodes;
+    }
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        int degree = 0;
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const uint64_t mj = plan.anchor_masks[static_cast<size_t>(j)];
+            const bool sees =
+                topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)] ||
+                topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)];
+            if (!sees) continue;
+            const int overlap = std::popcount(mi & mj);
+            if (overlap <= 0) continue;
+            link_score += (overlap == 1) ? 4 : 2;
+            ++degree;
+            ++degree_hist[static_cast<size_t>(j)];
+        }
+        degree_hist[static_cast<size_t>(i)] += degree;
+    }
+
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int deg = degree_hist[static_cast<size_t>(i)];
+        if (deg >= 2) branch_score += 3;
+        if (deg >= 3) branch_score += 4;
+    }
+
+    score += 5 * bivalue_nodes + 3 * trivalue_nodes;
+    score += std::min(link_score, dynamic_mode ? 36 : 28);
+    score += std::min(branch_score, dynamic_mode ? 28 : 18);
+    if (dynamic_mode && plan.anchor_count >= 6) score += 8;
+    return score;
+}
+
+inline int score_medusa_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::ColorLike, plan);
+    if (score < 0) return score;
+    int bivalue = 0;
+    int peer_links = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const uint64_t mi = plan.anchor_masks[static_cast<size_t>(i)];
+        if (std::popcount(mi) == 2) ++bivalue;
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            const bool sees =
+                topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)] ||
+                topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)];
+            if (sees && std::popcount(mi & plan.anchor_masks[static_cast<size_t>(j)]) >= 1) {
+                peer_links += 3;
+            }
+        }
+    }
+    score += 5 * bivalue + std::min(peer_links, 30);
+    return score;
+}
+
+inline int score_death_blossom_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::PetalLike, plan);
+    if (score < 0) return score;
+    int pivot_idx = -1;
+    int pivot_bits = -1;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int bits = std::popcount(plan.anchor_masks[static_cast<size_t>(i)]);
+        if (bits > pivot_bits) {
+            pivot_bits = bits;
+            pivot_idx = i;
+        }
+    }
+    if (pivot_idx < 0) return score;
+    const int pivot = plan.anchor_idx[static_cast<size_t>(pivot_idx)];
+    const uint64_t pivot_mask = plan.anchor_masks[static_cast<size_t>(pivot_idx)];
+    int petals = 0;
+    int shared = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        if (i == pivot_idx) continue;
+        const int idx = plan.anchor_idx[static_cast<size_t>(i)];
+        const bool sees =
+            topo.cell_row[static_cast<size_t>(pivot)] == topo.cell_row[static_cast<size_t>(idx)] ||
+            topo.cell_col[static_cast<size_t>(pivot)] == topo.cell_col[static_cast<size_t>(idx)] ||
+            topo.cell_box[static_cast<size_t>(pivot)] == topo.cell_box[static_cast<size_t>(idx)];
+        if (!sees) continue;
+        ++petals;
+        const int overlap = std::popcount(pivot_mask & plan.anchor_masks[static_cast<size_t>(i)]);
+        if (overlap >= 1) shared += 4;
+    }
+    score += 6 * petals + std::min(shared, 24);
+    return score;
+}
+
+inline int score_suedecoq_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::IntersectionLike, plan);
+    if (score < 0) return score;
+    int box_cluster = 0;
+    int row_col_spread = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            if (topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)]) {
+                ++box_cluster;
+            }
+            if (topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)]) {
+                ++row_col_spread;
+            }
+        }
+    }
+    score += std::min(box_cluster * 2, 24) + std::min(row_col_spread * 2, 24);
+    return score;
+}
+
+inline int score_kraken_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan) {
+    int score = score_generic_exact_plan(topo, PatternKind::FishLike, plan);
+    if (score < 0) return score;
+    uint64_t shared = ~0ULL;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        shared &= plan.anchor_masks[static_cast<size_t>(i)];
+    }
+    int line_pairs = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            if (topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)]) {
+                ++line_pairs;
+            }
+        }
+    }
+    score += 8 * std::min(std::popcount(shared), 2) + std::min(line_pairs * 2, 28);
+    return score;
+}
+
+inline int score_fish_variant_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    PatternKind kind,
+    int box_weight,
+    int line_cap,
+    int box_cap) {
+    int score = score_generic_exact_plan(topo, kind, plan);
+    if (score < 0) return score;
+    int line_pairs = 0;
+    int box_pairs = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            if (topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)]) {
+                ++line_pairs;
+            }
+            if (topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)]) {
+                ++box_pairs;
+            }
+        }
+    }
+    score += std::min(line_pairs * 2, line_cap) + std::min(box_pairs * box_weight, box_cap);
+    return score;
+}
+
+inline int score_aic_slot_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    PatternKind kind,
+    int box_bonus,
+    int line_bonus_cap) {
+    int score = score_generic_exact_plan(topo, kind, plan);
+    if (score < 0) return score;
+    int line_pairs = 0;
+    int box_pairs = 0;
+    int overlaps = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            if (topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)]) {
+                ++line_pairs;
+            }
+            if (topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)]) {
+                ++box_pairs;
+            }
+            overlaps += std::popcount(plan.anchor_masks[static_cast<size_t>(i)] &
+                                      plan.anchor_masks[static_cast<size_t>(j)]);
+        }
+    }
+    score += std::min(line_pairs * 2, line_bonus_cap);
+    score += std::min(box_pairs * box_bonus + overlaps, 28);
+    return score;
+}
+
+inline int score_als_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    bool aic_mode) {
+    int score = score_generic_exact_plan(topo, PatternKind::AlsLike, plan);
+    if (score < 0) return score;
+    int overlaps = 0;
+    int tri_masks = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        if (std::popcount(plan.anchor_masks[static_cast<size_t>(i)]) >= 3) ++tri_masks;
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            overlaps += std::popcount(plan.anchor_masks[static_cast<size_t>(i)] & plan.anchor_masks[static_cast<size_t>(j)]);
+        }
+    }
+    score += std::min(4 * tri_masks + overlaps, aic_mode ? 34 : 28);
+    return score;
+}
+
+inline int score_exclusion_exact_plan(
+    const GenericTopology& topo,
+    const ExactPatternTemplatePlan& plan,
+    bool triple_mode) {
+    int score = score_generic_exact_plan(topo, PatternKind::ExclusionLike, plan);
+    if (score < 0) return score;
+    int clique = 0;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const int ai = plan.anchor_idx[static_cast<size_t>(i)];
+        for (int j = i + 1; j < plan.anchor_count; ++j) {
+            const int aj = plan.anchor_idx[static_cast<size_t>(j)];
+            if (topo.cell_row[static_cast<size_t>(ai)] == topo.cell_row[static_cast<size_t>(aj)] ||
+                topo.cell_col[static_cast<size_t>(ai)] == topo.cell_col[static_cast<size_t>(aj)] ||
+                topo.cell_box[static_cast<size_t>(ai)] == topo.cell_box[static_cast<size_t>(aj)]) {
+                clique += 3;
+            }
+        }
+    }
+    score += std::min(clique, triple_mode ? 26 : 18);
+    return score;
+}
+
+inline bool exact_kind_matches_required_strategy(
+    RequiredStrategy required_strategy,
+    PatternKind kind) {
+    switch (required_strategy) {
+    case RequiredStrategy::MSLS:
+    case RequiredStrategy::PatternOverlayMethod:
+        return kind == PatternKind::LoopLike;
+    case RequiredStrategy::SeniorExocet:
+        return kind == PatternKind::ExocetLike;
+    default:
+        return true;
+    }
+}
+
+inline int score_exact_plan(
+    const GenericTopology& topo,
+    RequiredStrategy required_strategy,
+    PatternKind kind,
+    const ExactPatternTemplatePlan& plan) {
+    if (!exact_kind_matches_required_strategy(required_strategy, kind)) {
+        return -1;
+    }
+    switch (required_strategy) {
+    case RequiredStrategy::Exocet:
+        return score_exocet_exact_plan(topo, plan, false);
+    case RequiredStrategy::SeniorExocet:
+        return score_exocet_exact_plan(topo, plan, true);
+    case RequiredStrategy::SKLoop:
+        return score_skloop_exact_plan(topo, plan);
+    case RequiredStrategy::MSLS:
+        return score_msls_exact_plan(topo, plan);
+    case RequiredStrategy::Medusa3D:
+        return score_medusa_exact_plan(topo, plan);
+    case RequiredStrategy::DeathBlossom:
+        return score_death_blossom_exact_plan(topo, plan);
+    case RequiredStrategy::SueDeCoq:
+        return score_suedecoq_exact_plan(topo, plan);
+    case RequiredStrategy::KrakenFish:
+        return score_kraken_exact_plan(topo, plan);
+    case RequiredStrategy::FrankenFish:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::FrankenLike, 4, 24, 34);
+    case RequiredStrategy::MutantFish:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::MutantLike, 5, 24, 38);
+    case RequiredStrategy::Squirmbag:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::SquirmLike, 3, 36, 24);
+    case RequiredStrategy::Swordfish:
+    case RequiredStrategy::XWing:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::SwordfishLike, 2, 30, 20);
+    case RequiredStrategy::Jellyfish:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::JellyfishLike, 2, 34, 22);
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+        return score_fish_variant_exact_plan(topo, plan, PatternKind::FinnedFishLike, 4, 30, 30);
+    case RequiredStrategy::ALSXYWing:
+        return score_als_exact_plan(topo, plan, false);
+    case RequiredStrategy::ALSChain:
+        return score_als_exact_plan(topo, plan, false) + 4;
+    case RequiredStrategy::ALSAIC:
+        return score_als_exact_plan(topo, plan, true);
+    case RequiredStrategy::AlignedPairExclusion:
+        return score_exclusion_exact_plan(topo, plan, false);
+    case RequiredStrategy::AlignedTripleExclusion:
+        return score_exclusion_exact_plan(topo, plan, true);
+    case RequiredStrategy::AIC:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::AicLike, 2, 26);
+    case RequiredStrategy::GroupedAIC:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::GroupedAicLike, 4, 28);
+    case RequiredStrategy::GroupedXCycle:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::GroupedCycleLike, 3, 30);
+    case RequiredStrategy::ContinuousNiceLoop:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::NiceLoopLike, 3, 32);
+    case RequiredStrategy::XChain:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::XChainLike, 3, 36);
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::XChainLike, 2, 30);
+    case RequiredStrategy::EmptyRectangle:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::EmptyRectangleLike, 4, 40);
+    case RequiredStrategy::XYChain:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::XYChainLike, 2, 30);
+    case RequiredStrategy::RemotePairs:
+        return score_aic_slot_exact_plan(topo, plan, PatternKind::RemotePairsLike, 4, 38);
+    case RequiredStrategy::SimpleColoring:
+        return score_medusa_exact_plan(topo, plan);
+    case RequiredStrategy::ForcingChains:
+        return score_forcing_exact_plan(topo, plan, false);
+    case RequiredStrategy::DynamicForcingChains:
+        return score_forcing_exact_plan(topo, plan, true);
+    default:
+        return score_generic_exact_plan(topo, kind, plan);
+    }
+}
+
+inline uint64_t pick_random_bit_from_mask(uint64_t mask, std::mt19937_64& rng) {
+    const int bits = std::popcount(mask);
+    if (bits <= 0) return 0ULL;
+    int pick = static_cast<int>(rng() % static_cast<uint64_t>(bits));
+    uint64_t work = mask;
+    while (work != 0ULL) {
+        const int d0 = std::countr_zero(work);
+        const uint64_t bit = 1ULL << d0;
+        if (pick == 0) return bit;
+        work &= ~bit;
+        --pick;
+    }
+    return 0ULL;
+}
+
+inline uint64_t random_extra_digit(uint64_t full, uint64_t base, std::mt19937_64& rng) {
+    uint64_t avail = full & ~base;
+    if (avail == 0ULL) return 0ULL;
+    return pick_random_bit_from_mask(avail, rng);
+}
+
+inline bool mutate_exocet_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    bool senior_mode,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    const uint64_t base_mask = plan.anchor_masks[0] & plan.anchor_masks[1];
+    bool changed = false;
+
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = 2 + static_cast<int>(rng() % static_cast<uint64_t>(std::max(1, plan.anchor_count - 2)));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        uint64_t extra = mask & ~base_mask;
+        if (extra == 0ULL) {
+            extra = random_extra_digit(full, base_mask, rng);
+        } else if ((rng() & 1ULL) == 0ULL || std::popcount(extra) <= 1) {
+            extra = random_extra_digit(full, base_mask, rng);
+        } else {
+            extra = pick_random_bit_from_mask(extra, rng);
+        }
+        uint64_t mutated = base_mask | extra;
+        if (senior_mode && std::popcount(mutated) < 3) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        mutated &= full;
+        if (mutated != 0ULL && mutated != mask) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mutated;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_skloop_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    uint64_t core = 0ULL;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)];
+        if (std::popcount(mask) == 2) {
+            core = (core == 0ULL) ? mask : (core & mask);
+        }
+    }
+    if (core == 0ULL) core = plan.anchor_masks[1];
+
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        uint64_t mutated = mask;
+        if (std::popcount(mask) == 2) {
+            mutated = core;
+        } else {
+            mutated = core | random_extra_digit(full, core, rng);
+        }
+        if (std::popcount(mutated) < 3 && (rng() & 1ULL) != 0ULL) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        mutated &= full;
+        if (mutated != 0ULL && mutated != mask) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mutated;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_msls_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 6) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    uint64_t core = ~0ULL;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        core &= plan.anchor_masks[static_cast<size_t>(i)];
+    }
+    if (std::popcount(core) < 2) {
+        core = plan.anchor_masks[0];
+        if (std::popcount(core) > 2) {
+            uint64_t first = pick_random_bit_from_mask(core, rng);
+            uint64_t second = pick_random_bit_from_mask(core & ~first, rng);
+            core = first | second;
+        }
+    }
+
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        const int cell = plan.anchor_idx[static_cast<size_t>(idx)];
+        uint64_t mutated = core;
+        const bool row_box = topo.cell_box[static_cast<size_t>(cell)] ==
+                             topo.cell_box[static_cast<size_t>(plan.anchor_idx[0])];
+        mutated |= random_extra_digit(full, mutated, rng);
+        if (row_box || ((rng() & 1ULL) != 0ULL)) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        mutated &= full;
+        if (std::popcount(mutated) < 3) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        if (mutated != 0ULL && mutated != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mutated;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_medusa_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        if (std::popcount(mask) > 2 && (rng() & 1ULL) == 0ULL) {
+            mask = pick_random_bit_from_mask(mask, rng) |
+                   pick_random_bit_from_mask(mask & ~pick_random_bit_from_mask(mask, rng), rng);
+        } else {
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        mask &= full;
+        if (std::popcount(mask) < 2) mask |= random_extra_digit(full, mask, rng);
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_death_blossom_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        if (idx == 0) {
+            mask |= random_extra_digit(full, mask, rng);
+        } else if (std::popcount(mask) > 2) {
+            mask = pick_random_bit_from_mask(mask, rng) |
+                   random_extra_digit(full, pick_random_bit_from_mask(mask, rng), rng);
+        } else {
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        mask &= full;
+        if (std::popcount(mask) < ((idx == 0) ? 3 : 2)) {
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_suedecoq_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 5) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)] | random_extra_digit(full, plan.anchor_masks[static_cast<size_t>(idx)], rng);
+        if (std::popcount(mask) > 4 && (rng() & 1ULL) == 0ULL) {
+            mask = pick_random_bit_from_mask(mask, rng) |
+                   pick_random_bit_from_mask(mask & ~pick_random_bit_from_mask(mask, rng), rng);
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        mask &= full;
+        if (std::popcount(mask) < 2) mask |= random_extra_digit(full, mask, rng);
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_kraken_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    uint64_t core = plan.anchor_masks[0] & plan.anchor_masks[1];
+    if (std::popcount(core) < 2) core = plan.anchor_masks[0];
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = core;
+        if (idx >= 4 || (rng() & 1ULL) == 0ULL) {
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        mask &= full;
+        if (std::popcount(mask) < 2) mask |= random_extra_digit(full, mask, rng);
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_als_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    bool aic_mode,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 3) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        mask |= random_extra_digit(full, mask, rng);
+        if (aic_mode || (rng() & 1ULL) == 0ULL) {
+            mask |= random_extra_digit(full, mask, rng);
+        }
+        mask &= full;
+        if (std::popcount(mask) < 2) mask |= random_extra_digit(full, mask, rng);
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_exclusion_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    bool triple_mode,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < (triple_mode ? 3 : 2)) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        uint64_t mask = plan.anchor_masks[static_cast<size_t>(idx)] | random_extra_digit(full, plan.anchor_masks[static_cast<size_t>(idx)], rng);
+        mask &= full;
+        if (std::popcount(mask) < 2) mask |= random_extra_digit(full, mask, rng);
+        if (mask != 0ULL && mask != plan.anchor_masks[static_cast<size_t>(idx)]) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mask;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_forcing_template_plan(
+    const GenericTopology& topo,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    bool dynamic_mode,
+    int strength) {
+    if (!plan.valid || plan.anchor_count < 4) return false;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    uint64_t union_mask = 0ULL;
+    for (int i = 0; i < plan.anchor_count; ++i) {
+        union_mask |= plan.anchor_masks[static_cast<size_t>(i)];
+    }
+    if (union_mask == 0ULL) union_mask = full;
+
+    bool changed = false;
+    for (int rep = 0; rep < std::max(1, strength); ++rep) {
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(plan.anchor_count));
+        const uint64_t old_mask = plan.anchor_masks[static_cast<size_t>(idx)];
+        uint64_t first = pick_random_bit_from_mask(union_mask, rng);
+        uint64_t second = pick_random_bit_from_mask(union_mask & ~first, rng);
+        if (second == 0ULL) second = random_extra_digit(full, first, rng);
+        uint64_t mutated = first | second;
+        if (dynamic_mode || ((rng() & 1ULL) != 0ULL)) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        mutated &= full;
+        if (std::popcount(mutated) < 2) {
+            mutated |= random_extra_digit(full, mutated, rng);
+        }
+        if (mutated != 0ULL && mutated != old_mask) {
+            plan.anchor_masks[static_cast<size_t>(idx)] = mutated;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+inline bool mutate_exact_template_for_family(
+    const GenericTopology& topo,
+    RequiredStrategy required_strategy,
+    ExactPatternTemplatePlan& plan,
+    std::mt19937_64& rng,
+    int strength) {
+    switch (required_strategy) {
+    case RequiredStrategy::Exocet:
+        return mutate_exocet_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::SeniorExocet:
+        return mutate_exocet_template_plan(topo, plan, rng, true, strength);
+    case RequiredStrategy::SKLoop:
+        return mutate_skloop_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::MSLS:
+        return mutate_msls_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::Medusa3D:
+        return mutate_medusa_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::DeathBlossom:
+        return mutate_death_blossom_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::SueDeCoq:
+        return mutate_suedecoq_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::KrakenFish:
+        return mutate_kraken_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::FrankenFish:
+        return mutate_kraken_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::MutantFish:
+        return mutate_kraken_template_plan(topo, plan, rng, strength + 1);
+    case RequiredStrategy::Squirmbag:
+        return mutate_kraken_template_plan(topo, plan, rng, strength + 2);
+    case RequiredStrategy::Swordfish:
+    case RequiredStrategy::XWing:
+    case RequiredStrategy::Jellyfish:
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+        return mutate_kraken_template_plan(topo, plan, rng, strength + 1);
+    case RequiredStrategy::SimpleColoring:
+        return mutate_medusa_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::ALSXYWing:
+        return mutate_als_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::ALSChain:
+        return mutate_als_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::ALSAIC:
+        return mutate_als_template_plan(topo, plan, rng, true, strength);
+    case RequiredStrategy::AlignedPairExclusion:
+        return mutate_exclusion_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::AlignedTripleExclusion:
+        return mutate_exclusion_template_plan(topo, plan, rng, true, strength);
+    case RequiredStrategy::AIC:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::GroupedAIC:
+        return mutate_forcing_template_plan(topo, plan, rng, true, strength);
+    case RequiredStrategy::GroupedXCycle:
+        return mutate_skloop_template_plan(topo, plan, rng, strength);
+    case RequiredStrategy::ContinuousNiceLoop:
+        return mutate_skloop_template_plan(topo, plan, rng, strength + 1);
+    case RequiredStrategy::XChain:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength + 2);
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength + 1);
+    case RequiredStrategy::EmptyRectangle:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength + 3);
+    case RequiredStrategy::XYChain:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength + 1);
+    case RequiredStrategy::RemotePairs:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength + 3);
+    case RequiredStrategy::ForcingChains:
+        return mutate_forcing_template_plan(topo, plan, rng, false, strength);
+    case RequiredStrategy::DynamicForcingChains:
+        return mutate_forcing_template_plan(topo, plan, rng, true, strength);
+    default:
+        return false;
+    }
+}
+
+inline int adaptive_mutation_strength(
+    RequiredStrategy required_strategy,
+    int zero_use_streak,
+    int failure_streak,
+    PatternMutationSource source) {
+    const int zero_term = std::max(0, zero_use_streak);
+    const int fail_term = std::max(0, failure_streak);
+    int strength = 1;
+    switch (required_strategy) {
+    case RequiredStrategy::Exocet:
+    case RequiredStrategy::SeniorExocet:
+        strength += zero_term / 2 + fail_term / 3;
+        break;
+    case RequiredStrategy::SKLoop:
+        strength += zero_term / 2 + fail_term / 2;
+        break;
+    case RequiredStrategy::KrakenFish:
+    case RequiredStrategy::FrankenFish:
+    case RequiredStrategy::MutantFish:
+    case RequiredStrategy::Squirmbag:
+    case RequiredStrategy::Swordfish:
+    case RequiredStrategy::XWing:
+    case RequiredStrategy::Jellyfish:
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+    case RequiredStrategy::DeathBlossom:
+        strength += zero_term / 2 + fail_term / 2;
+        break;
+    case RequiredStrategy::Medusa3D:
+    case RequiredStrategy::SueDeCoq:
+        strength += zero_term / 3 + fail_term / 2;
+        break;
+    case RequiredStrategy::ALSXYWing:
+    case RequiredStrategy::ALSChain:
+    case RequiredStrategy::ALSAIC:
+    case RequiredStrategy::AlignedPairExclusion:
+    case RequiredStrategy::AlignedTripleExclusion:
+        strength += zero_term / 2 + fail_term / 2;
+        break;
+    case RequiredStrategy::AIC:
+    case RequiredStrategy::GroupedAIC:
+    case RequiredStrategy::GroupedXCycle:
+    case RequiredStrategy::ContinuousNiceLoop:
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+    case RequiredStrategy::XYChain:
+        strength += zero_term / 2 + fail_term;
+        break;
+    case RequiredStrategy::XChain:
+    case RequiredStrategy::EmptyRectangle:
+    case RequiredStrategy::RemotePairs:
+        strength += zero_term + fail_term;
+        break;
+    case RequiredStrategy::SimpleColoring:
+        strength += zero_term / 3 + fail_term / 2;
+        break;
+    case RequiredStrategy::ForcingChains:
+    case RequiredStrategy::DynamicForcingChains:
+        strength += zero_term + fail_term / 2;
+        break;
+    default:
+        strength += zero_term / 2 + fail_term / 2;
+        break;
+    }
+    if (source == PatternMutationSource::Best) {
+        strength += std::max(1, zero_term / 3);
+    }
+    return std::clamp(strength, 1, 16);
+}
+
+inline void note_template_attempt_feedback(
+    RequiredStrategy required_strategy,
+    PatternKind kind,
+    bool exact_template,
+    int template_score,
+    int required_analyzed,
+    int required_use,
+    int required_hit) {
+    PatternMutationState& state = tls_pattern_mutation_state();
+    if (state.strategy != required_strategy || state.kind != kind) {
+        state.reset(required_strategy, kind);
+    }
+    if (!exact_template) {
+        if (required_use > 0 || required_hit > 0) {
+            state.zero_use_streak = 0;
+            state.failure_streak = 0;
+        }
+        return;
+    }
+    if (required_analyzed > 0 && required_use == 0) {
+        ++state.zero_use_streak;
+    } else if (required_use > 0) {
+        state.zero_use_streak = 0;
+    }
+    if (required_hit > 0) {
+        state.failure_streak = 0;
+    } else {
+        ++state.failure_streak;
+    }
+    if (template_score > state.best_score) {
+        state.best_score = template_score;
+    }
+}
+
+inline bool try_exact_templates_for_level(
+    const GenericTopology& topo,
+    RequiredStrategy required_strategy,
+    int forcing_level,
+    std::mt19937_64& rng,
+    ExactPatternTemplatePlan& exact_plan,
+    PatternKind& out_kind,
+    int* out_score = nullptr) {
+    exact_plan = {};
+    out_kind = PatternKind::None;
+    int best_score = -1;
+
+    auto consider = [&](PatternKind candidate_kind, const ExactPatternTemplatePlan& candidate_plan) {
+        const int score = score_exact_plan(topo, required_strategy, candidate_kind, candidate_plan);
+        if (score > best_score) {
+            best_score = score;
+            exact_plan = candidate_plan;
+            out_kind = candidate_kind;
+        }
+    };
+
+    auto try_exocet = [&](bool senior_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateExocet::build(topo, rng, candidate, senior_mode)) {
+            consider(PatternKind::ExocetLike, candidate);
+        }
+    };
+    auto try_sk = [&](bool dense_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateSKLoop::build(topo, rng, candidate, dense_mode)) {
+            consider(PatternKind::LoopLike, candidate);
+        }
+    };
+    auto try_msls = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateMslsOverlay::build_msls(topo, rng, candidate)) {
+            consider(PatternKind::LoopLike, candidate);
+        }
+    };
+    auto try_overlay = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateMslsOverlay::build_overlay(topo, rng, candidate)) {
+            consider(PatternKind::LoopLike, candidate);
+        }
+    };
+    auto try_forcing = [&](bool dynamic_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateForcing::build(topo, rng, candidate, dynamic_mode)) {
+            consider(PatternKind::ForcingLike, candidate);
+        }
+    };
+    auto try_medusa = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_medusa(topo, rng, candidate)) {
+            consider(PatternKind::ColorLike, candidate);
+        }
+    };
+    auto try_death_blossom = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_death_blossom(topo, rng, candidate)) {
+            consider(PatternKind::PetalLike, candidate);
+        }
+    };
+    auto try_suedecoq = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_sue_de_coq(topo, rng, candidate)) {
+            consider(PatternKind::IntersectionLike, candidate);
+        }
+    };
+    auto try_kraken = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_kraken_fish(topo, rng, candidate)) {
+            consider(PatternKind::FishLike, candidate);
+        }
+    };
+    auto try_franken = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_franken_fish(topo, rng, candidate)) {
+            consider(PatternKind::FrankenLike, candidate);
+        }
+    };
+    auto try_mutant = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_mutant_fish(topo, rng, candidate)) {
+            consider(PatternKind::MutantLike, candidate);
+        }
+    };
+    auto try_squirm = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_squirmbag(topo, rng, candidate)) {
+            consider(PatternKind::SquirmLike, candidate);
+        }
+    };
+    auto try_als_xy = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_als_xy_wing(topo, rng, candidate)) {
+            consider(PatternKind::AlsLike, candidate);
+        }
+    };
+    auto try_als_chain = [&](bool aic_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_als_chain(topo, rng, candidate, aic_mode)) {
+            consider(PatternKind::AlsLike, candidate);
+        }
+    };
+    auto try_exclusion = [&](bool triple_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_aligned_exclusion(topo, rng, candidate, triple_mode)) {
+            consider(PatternKind::ExclusionLike, candidate);
+        }
+    };
+    auto try_aic = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_aic(topo, rng, candidate)) {
+            consider(PatternKind::AicLike, candidate);
+        }
+    };
+    auto try_grouped_aic = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_grouped_aic(topo, rng, candidate)) {
+            consider(PatternKind::GroupedAicLike, candidate);
+        }
+    };
+    auto try_grouped_xcycle = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_grouped_x_cycle(topo, rng, candidate)) {
+            consider(PatternKind::GroupedCycleLike, candidate);
+        }
+    };
+    auto try_continuous_nice_loop = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_continuous_nice_loop(topo, rng, candidate)) {
+            consider(PatternKind::NiceLoopLike, candidate);
+        }
+    };
+    auto try_xchain = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_x_chain(topo, rng, candidate)) {
+            consider(PatternKind::XChainLike, candidate);
+        }
+    };
+    auto try_xychain = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_xy_chain(topo, rng, candidate)) {
+            consider(PatternKind::XYChainLike, candidate);
+        }
+    };
+    auto try_empty_rectangle = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_empty_rectangle(topo, rng, candidate)) {
+            consider(PatternKind::EmptyRectangleLike, candidate);
+        }
+    };
+    auto try_remote_pairs = [&]() {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_remote_pairs(topo, rng, candidate)) {
+            consider(PatternKind::RemotePairsLike, candidate);
+        }
+    };
+    auto try_large_fish = [&](PatternKind kind, int line_count, bool finned_mode) {
+        ExactPatternTemplatePlan candidate{};
+        if (TemplateP6Exact::build_large_fish(topo, rng, candidate, line_count, finned_mode)) {
+            consider(kind, candidate);
+        }
+    };
+
+    const bool strict_exact_family =
+        required_strategy == RequiredStrategy::MSLS ||
+        required_strategy == RequiredStrategy::PatternOverlayMethod ||
+        required_strategy == RequiredStrategy::SeniorExocet;
+
+    switch (required_strategy) {
+        case RequiredStrategy::Exocet:
+            try_exocet(false);
+            break;
+        case RequiredStrategy::SeniorExocet:
+            try_exocet(true);
+            break;
+        case RequiredStrategy::SKLoop:
+            try_sk(true);
+            break;
+        case RequiredStrategy::MSLS:
+            try_msls();
+            break;
+        case RequiredStrategy::PatternOverlayMethod:
+            try_overlay();
+            break;
+        case RequiredStrategy::Medusa3D:
+            try_medusa();
+            break;
+        case RequiredStrategy::DeathBlossom:
+            try_death_blossom();
+            break;
+        case RequiredStrategy::SueDeCoq:
+            try_suedecoq();
+            break;
+        case RequiredStrategy::KrakenFish:
+            try_kraken();
+            break;
+        case RequiredStrategy::FrankenFish:
+            try_franken();
+            break;
+        case RequiredStrategy::MutantFish:
+            try_mutant();
+            break;
+        case RequiredStrategy::Squirmbag:
+            try_squirm();
+            break;
+        case RequiredStrategy::ALSXYWing:
+            try_als_xy();
+            break;
+        case RequiredStrategy::ALSChain:
+            try_als_chain(false);
+            break;
+        case RequiredStrategy::ALSAIC:
+            try_als_chain(true);
+            break;
+        case RequiredStrategy::AlignedPairExclusion:
+            try_exclusion(false);
+            break;
+        case RequiredStrategy::AlignedTripleExclusion:
+            try_exclusion(true);
+            break;
+        case RequiredStrategy::ForcingChains:
+            try_forcing(false);
+            break;
+        case RequiredStrategy::DynamicForcingChains:
+            try_forcing(true);
+            break;
+        case RequiredStrategy::AIC:
+            try_aic();
+            break;
+        case RequiredStrategy::GroupedAIC:
+            try_grouped_aic();
+            break;
+        case RequiredStrategy::GroupedXCycle:
+            try_grouped_xcycle();
+            break;
+        case RequiredStrategy::ContinuousNiceLoop:
+            try_continuous_nice_loop();
+            break;
+        case RequiredStrategy::XChain:
+            try_xchain();
+            break;
+        case RequiredStrategy::XYChain:
+            try_xychain();
+            break;
+        case RequiredStrategy::Swordfish:
+            try_large_fish(PatternKind::SwordfishLike, 3, false);
+            break;
+        case RequiredStrategy::Jellyfish:
+            try_large_fish(PatternKind::JellyfishLike, 4, false);
+            break;
+        case RequiredStrategy::XWing:
+            try_large_fish(PatternKind::SwordfishLike, 2, false);
+            break;
+        case RequiredStrategy::FinnedXWingSashimi:
+            try_large_fish(PatternKind::FinnedFishLike, 2, true);
+            break;
+        case RequiredStrategy::FinnedSwordfishJellyfish:
+            try_large_fish(PatternKind::FinnedFishLike, 3, true);
+            break;
+        case RequiredStrategy::Skyscraper:
+        case RequiredStrategy::TwoStringKite:
+            try_xchain();
+            break;
+        case RequiredStrategy::EmptyRectangle:
+            try_empty_rectangle();
+            break;
+        case RequiredStrategy::RemotePairs:
+            try_remote_pairs();
+            break;
+        case RequiredStrategy::SimpleColoring:
+            try_medusa();
+            break;
+        default:
+            break;
+    }
+
+    if (!strict_exact_family && forcing_level >= 8) {
+        try_exocet(false);
+        try_exocet(true);
+        try_msls();
+        try_overlay();
+        try_sk(true);
+        try_kraken();
+        try_franken();
+        try_mutant();
+        try_squirm();
+        try_death_blossom();
+        try_medusa();
+        try_suedecoq();
+        try_als_xy();
+        try_als_chain(true);
+        try_exclusion(true);
+        try_grouped_xcycle();
+        try_continuous_nice_loop();
+        try_grouped_aic();
+        try_aic();
+        try_xchain();
+        try_xychain();
+        try_empty_rectangle();
+        try_remote_pairs();
+        try_large_fish(PatternKind::SwordfishLike, 3, false);
+        try_large_fish(PatternKind::SwordfishLike, 2, false);
+        try_large_fish(PatternKind::JellyfishLike, 4, false);
+        try_large_fish(PatternKind::FinnedFishLike, 3, true);
+        try_forcing(true);
+    } else if (!strict_exact_family && forcing_level >= 7) {
+        try_msls();
+        try_overlay();
+        try_sk(true);
+        try_death_blossom();
+        try_medusa();
+        try_suedecoq();
+        try_franken();
+        try_mutant();
+        try_squirm();
+        try_als_xy();
+        try_als_chain(false);
+        try_exclusion(false);
+        try_grouped_xcycle();
+        try_continuous_nice_loop();
+        try_grouped_aic();
+        try_aic();
+        try_xchain();
+        try_xychain();
+        try_empty_rectangle();
+        try_remote_pairs();
+        try_large_fish(PatternKind::SwordfishLike, 3, false);
+        try_large_fish(PatternKind::SwordfishLike, 2, false);
+        try_large_fish(PatternKind::FinnedFishLike, 2, true);
+        try_medusa();
+        try_forcing(false);
+        try_exocet(false);
+    }
+
+    if (out_score != nullptr) *out_score = best_score;
+    return best_score >= 0 && exact_plan.valid;
+}
+
+// --- Szablony luźne (fallback gdy brakuje Exact Template) ---
+
+inline bool build_chain_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.n < 2) return false;
+    const int n = topo.n;
+    int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int r2 = r1;
+    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int c2 = c1;
+    for (int t = 0; t < 64 && r2 == r1; ++t) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    for (int t = 0; t < 64 && c2 == c1; ++t) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    if (r1 == r2 || c1 == c2) return false;
+    sc.add_anchor(r1 * n + c1);
+    sc.add_anchor(r1 * n + c2);
+    sc.add_anchor(r2 * n + c2);
+    sc.add_anchor(r2 * n + c1);
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_exocet_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.box_rows <= 1 || topo.box_cols <= 1) return false;
+    const int n = topo.n;
+    const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    const int house = 2 * n + box;
+    const int start = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    if (end - start < 2) return false;
+
+    int b1 = topo.houses_flat[static_cast<size_t>(start + (rng() % static_cast<uint64_t>(end - start)))];
+    int b2 = b1;
+    for (int t = 0; t < 128; ++t) {
+        const int c = topo.houses_flat[static_cast<size_t>(start + (rng() % static_cast<uint64_t>(end - start)))];
+        if (c == b1) continue;
+        if (topo.cell_row[static_cast<size_t>(c)] == topo.cell_row[static_cast<size_t>(b1)]) continue;
+        if (topo.cell_col[static_cast<size_t>(c)] == topo.cell_col[static_cast<size_t>(b1)]) continue;
+        b2 = c;
+        break;
+    }
+    if (b1 == b2) return false;
+    sc.add_anchor(b1);
+    sc.add_anchor(b2);
+
+    const int r1 = topo.cell_row[static_cast<size_t>(b1)];
+    const int r2 = topo.cell_row[static_cast<size_t>(b2)];
+    const int c1 = topo.cell_col[static_cast<size_t>(b1)];
+    const int c2 = topo.cell_col[static_cast<size_t>(b2)];
+    sc.add_anchor(r1 * n + c2);
+    sc.add_anchor(r2 * n + c1);
+    return sc.anchor_count >= 2;
+}
+
+inline bool build_loop_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_chain_anchors(topo, sc, rng)) return false;
+    const int n = topo.n;
+    int r3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    sc.add_anchor(r3 * n + c3);
+    r3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    sc.add_anchor(r3 * n + c3);
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_color_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_chain_anchors(topo, sc, rng)) return false;
+    const int n = topo.n;
+    const int r = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    const int c = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    sc.add_anchor(r * n + c);
+    sc.add_anchor(r * n + static_cast<int>(rng() % static_cast<uint64_t>(n)));
+    return sc.anchor_count >= 5;
+}
+
+inline bool build_petal_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    const int pivot = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
+    sc.add_anchor(pivot);
+    const int start = topo.peer_offsets[static_cast<size_t>(pivot)];
+    const int end = topo.peer_offsets[static_cast<size_t>(pivot + 1)];
+    for (int p = start; p < end && sc.anchor_count < 5; ++p) {
+        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    }
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_intersection_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.box_rows <= 1 || topo.box_cols <= 1) return false;
+    const int n = topo.n;
+    const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    const int br = box / topo.box_cols_count;
+    const int bc = box % topo.box_cols_count;
+    const int r0 = br * topo.box_rows;
+    const int c0 = bc * topo.box_cols;
+    const int row = r0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_rows));
+    const int col = c0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_cols));
+    for (int dc = 0; dc < topo.box_cols; ++dc) sc.add_anchor(row * n + (c0 + dc));
+    for (int dr = 0; dr < topo.box_rows; ++dr) sc.add_anchor((r0 + dr) * n + col);
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_fish_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.n < 4) return false;
+    const int n = topo.n;
+    const int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int r2 = r1;
+    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int c2 = c1;
+    for (int g = 0; g < 64 && r2 == r1; ++g) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    for (int g = 0; g < 64 && c2 == c1; ++g) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    if (r1 == r2 || c1 == c2) return false;
+    sc.add_anchor(r1 * n + c1);
+    sc.add_anchor(r1 * n + c2);
+    sc.add_anchor(r2 * n + c1);
+    sc.add_anchor(r2 * n + c2);
+    int c3 = c2;
+    for (int g = 0; g < 64 && (c3 == c1 || c3 == c2); ++g) c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    if (c3 != c1 && c3 != c2) {
+        sc.add_anchor(r1 * n + c3);
+        sc.add_anchor(r2 * n + c3);
+    }
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_franken_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_fish_like_anchors(topo, sc, rng) || topo.box_rows <= 1 || topo.box_cols <= 1) return false;
+    const int seed = sc.anchors[0];
+    const int box = topo.cell_box[static_cast<size_t>(seed)];
+    const int house = 2 * topo.n + box;
+    const int p0 = topo.house_offsets[static_cast<size_t>(house)];
+    const int p1 = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = p0; p < p1 && sc.anchor_count < 7; ++p) {
+        sc.add_anchor(topo.houses_flat[static_cast<size_t>(p)]);
+    }
+    return sc.anchor_count >= 5;
+}
+
+inline bool build_mutant_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_franken_like_anchors(topo, sc, rng)) return false;
+    sc.add_anchor(static_cast<int>(rng() % static_cast<uint64_t>(topo.nn)));
+    sc.add_anchor(static_cast<int>(rng() % static_cast<uint64_t>(topo.nn)));
+    return sc.anchor_count >= 6;
+}
+
+inline bool build_squirm_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.n < 6) return false;
+    const int n = topo.n;
+    int rows[3] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1 };
+    rows[1] = rows[0];
+    rows[2] = rows[0];
+    for (int g = 0; g < 64 && rows[1] == rows[0]; ++g) rows[1] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    for (int g = 0; g < 96 && (rows[2] == rows[0] || rows[2] == rows[1]); ++g) rows[2] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    int cols[3] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1 };
+    cols[1] = cols[0];
+    cols[2] = cols[0];
+    for (int g = 0; g < 64 && cols[1] == cols[0]; ++g) cols[1] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    for (int g = 0; g < 96 && (cols[2] == cols[0] || cols[2] == cols[1]); ++g) cols[2] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    if (rows[0] == rows[1] || rows[0] == rows[2] || rows[1] == rows[2] ||
+        cols[0] == cols[1] || cols[0] == cols[2] || cols[1] == cols[2]) return false;
+    for (int ri = 0; ri < 3; ++ri) {
+        for (int ci = 0; ci < 3; ++ci) {
+            sc.add_anchor(rows[ri] * n + cols[ci]);
+        }
+    }
+    return sc.anchor_count >= 9;
+}
+
+inline bool build_als_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    const int n = topo.n;
+    if (n < 4) return false;
+    const int pivot = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
+    sc.add_anchor(pivot);
+    const int start = topo.peer_offsets[static_cast<size_t>(pivot)];
+    const int end = topo.peer_offsets[static_cast<size_t>(pivot + 1)];
+    for (int p = start; p < end && sc.anchor_count < 5; ++p) {
+        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    }
+    return sc.anchor_count >= 3;
+}
+
+inline bool build_exclusion_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    const int a = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
+    sc.add_anchor(a);
+    const int start = topo.peer_offsets[static_cast<size_t>(a)];
+    const int end = topo.peer_offsets[static_cast<size_t>(a + 1)];
+    for (int p = start; p < end && sc.anchor_count < 4; ++p) {
+        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    }
+    return sc.anchor_count >= 2;
+}
+
+inline bool build_aic_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    return build_chain_anchors(topo, sc, rng);
+}
+
+inline bool build_grouped_aic_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_chain_anchors(topo, sc, rng)) return false;
+    const int seed = sc.anchors[0];
+    const int box = topo.cell_box[static_cast<size_t>(seed)];
+    const int house = 2 * topo.n + box;
+    const int p0 = topo.house_offsets[static_cast<size_t>(house)];
+    const int p1 = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = p0; p < p1 && sc.anchor_count < 6; ++p) {
+        sc.add_anchor(topo.houses_flat[static_cast<size_t>(p)]);
+    }
+    return sc.anchor_count >= 5;
+}
+
+inline bool build_grouped_cycle_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    return build_loop_like_anchors(topo, sc, rng);
+}
+
+inline bool build_niceloop_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    return build_loop_like_anchors(topo, sc, rng);
+}
+
+inline bool build_empty_rectangle_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_intersection_like_anchors(topo, sc, rng)) return false;
+    if (sc.anchor_count <= 0) return false;
+    const int pivot = sc.anchors[0];
+    const int row = topo.cell_row[static_cast<size_t>(pivot)];
+    const int col = topo.cell_col[static_cast<size_t>(pivot)];
+    for (int p = topo.peer_offsets[static_cast<size_t>(pivot)];
+         p < topo.peer_offsets[static_cast<size_t>(pivot + 1)] && sc.anchor_count < 6; ++p) {
+        const int idx = topo.peers_flat[static_cast<size_t>(p)];
+        if (topo.cell_row[static_cast<size_t>(idx)] == row || topo.cell_col[static_cast<size_t>(idx)] == col) {
+            sc.add_anchor(idx);
+        }
+    }
+    return sc.anchor_count >= 4;
+}
+
+inline bool build_remote_pairs_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (!build_niceloop_like_anchors(topo, sc, rng)) return false;
+    while (sc.anchor_count < 6) {
+        sc.add_anchor(static_cast<int>(rng() % static_cast<uint64_t>(topo.nn)));
+        if (sc.anchor_count >= 6) break;
+    }
+    return sc.anchor_count >= 5;
+}
+
+inline int default_anchor_count(const GenericTopology& topo, PatternKind kind) {
+    if (topo.n >= 36) {
+        switch (kind) {
+        case PatternKind::ExocetLike: return 18;
+        case PatternKind::LoopLike: return 20;
+        case PatternKind::ForcingLike: return 20;
+        case PatternKind::ColorLike: return 18;
+        case PatternKind::PetalLike: return 18;
+        case PatternKind::IntersectionLike: return 18;
+        case PatternKind::FishLike: return 18;
+        case PatternKind::FrankenLike: return 18;
+        case PatternKind::MutantLike: return 18;
+        case PatternKind::SquirmLike: return 20;
+        case PatternKind::AlsLike: return 18;
+        case PatternKind::ExclusionLike: return 16;
+        case PatternKind::AicLike: return 18;
+        case PatternKind::GroupedAicLike: return 18;
+        case PatternKind::GroupedCycleLike: return 18;
+        case PatternKind::NiceLoopLike: return 18;
+        case PatternKind::XChainLike: return 18;
+        case PatternKind::XYChainLike: return 18;
+        case PatternKind::EmptyRectangleLike: return 16;
+        case PatternKind::RemotePairsLike: return 18;
+        case PatternKind::SwordfishLike: return 18;
+        case PatternKind::JellyfishLike: return 20;
+        case PatternKind::FinnedFishLike: return 18;
+        case PatternKind::Chain: return 16;
+        default: return 0;
+        }
+    }
+    if (topo.n >= 25) {
+        switch (kind) {
+        case PatternKind::ExocetLike: return 14;
+        case PatternKind::LoopLike: return 16;
+        case PatternKind::ForcingLike: return 16;
+        case PatternKind::ColorLike: return 14;
+        case PatternKind::PetalLike: return 14;
+        case PatternKind::IntersectionLike: return 14;
+        case PatternKind::FishLike: return 14;
+        case PatternKind::FrankenLike: return 14;
+        case PatternKind::MutantLike: return 14;
+        case PatternKind::SquirmLike: return 16;
+        case PatternKind::AlsLike: return 14;
+        case PatternKind::ExclusionLike: return 12;
+        case PatternKind::AicLike: return 14;
+        case PatternKind::GroupedAicLike: return 14;
+        case PatternKind::GroupedCycleLike: return 14;
+        case PatternKind::NiceLoopLike: return 14;
+        case PatternKind::XChainLike: return 14;
+        case PatternKind::XYChainLike: return 14;
+        case PatternKind::EmptyRectangleLike: return 12;
+        case PatternKind::RemotePairsLike: return 14;
+        case PatternKind::SwordfishLike: return 14;
+        case PatternKind::JellyfishLike: return 16;
+        case PatternKind::FinnedFishLike: return 14;
+        case PatternKind::Chain: return 12;
+        default: return 0;
+        }
+    }
+    switch (kind) {
+    case PatternKind::ExocetLike: return std::clamp(topo.n / 2, 4, 10);
+    case PatternKind::LoopLike: return std::clamp(topo.n / 2 + 2, 6, 12);
+    case PatternKind::ForcingLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::ColorLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::PetalLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::IntersectionLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::FishLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::FrankenLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::MutantLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::SquirmLike: return std::clamp(topo.n / 2 + 2, 8, 14);
+    case PatternKind::AlsLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::ExclusionLike: return std::clamp(topo.n / 3 + 4, 4, 10);
+    case PatternKind::AicLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::GroupedAicLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::GroupedCycleLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::NiceLoopLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::XChainLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::XYChainLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::EmptyRectangleLike: return std::clamp(topo.n / 3 + 4, 4, 10);
+    case PatternKind::RemotePairsLike: return std::clamp(topo.n / 2, 7, 12);
+    case PatternKind::SwordfishLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::JellyfishLike: return std::clamp(topo.n / 2 + 2, 8, 14);
+    case PatternKind::FinnedFishLike: return std::clamp(topo.n / 2, 6, 12);
+    case PatternKind::Chain: return std::clamp(topo.n / 3 + 3, 4, 10);
+    default: return 0;
+    }
+}
+
+inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, PatternKind kind, std::mt19937_64& rng) {
+    if (sc.anchor_count <= 0) return;
+    const uint64_t full = pf_full_mask_for_n(topo.n);
+    const bool large_geom = topo.n >= 25;
+    const int want_a = large_geom ? 3 : 2;
+    const int want_b = large_geom ? 4 : 2;
+    const int want_c = large_geom ? 5 : 3;
+    uint64_t mask_a = random_digit_mask(topo.n, want_a, rng);
+    uint64_t mask_b = random_digit_mask(topo.n, want_b, rng);
+    uint64_t mask_c = random_digit_mask(topo.n, want_c, rng);
+    
+    if (kind == PatternKind::ExocetLike) {
+        const uint64_t shared = random_digit_mask(topo.n, large_geom ? 4 : 3, rng);
+        if (sc.anchor_count >= 1) sc.allowed_masks[static_cast<size_t>(sc.anchors[0])] = shared;
+        if (sc.anchor_count >= 2) sc.allowed_masks[static_cast<size_t>(sc.anchors[1])] = shared;
+        for (int i = 2; i < sc.anchor_count; ++i) {
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] =
+                large_geom ? (mask_b | random_extra_digit(full, mask_b, rng)) & full : mask_c;
+        }
+        return;
+    }
+    if (kind == PatternKind::ForcingLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i & 1) ? (mask_a | mask_b) : (mask_b | mask_c);
+            if (large_geom && (i % 3 == 0)) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::LoopLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i % 3 == 0) ? mask_c : ((i & 1) ? mask_a : mask_b);
+            if (large_geom && (i % 4 == 0)) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::ColorLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = ((i & 1) == 0) ? mask_a : (mask_a | random_extra_digit(full, mask_a, rng));
+            if (std::popcount(m) < 2) m |= random_extra_digit(full, m, rng);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::PetalLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i == 0) ? (mask_a | mask_b) : ((i & 1) ? mask_a : mask_b);
+            if (i == 0 || (large_geom && (i % 3 == 0))) m |= random_extra_digit(full, m, rng);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::IntersectionLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i % 3 == 0) ? (mask_a | mask_b) : ((i & 1) ? mask_b : mask_c);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::FishLike) {
+        const uint64_t core = random_digit_mask(topo.n, 2, rng);
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = core;
+            if (i >= 4 || (large_geom && (i % 3 == 0))) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::FrankenLike || kind == PatternKind::MutantLike || kind == PatternKind::SquirmLike) {
+        const uint64_t core = random_digit_mask(topo.n, 2, rng);
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = core;
+            if (kind == PatternKind::SquirmLike) {
+                if (i >= 9 || (large_geom && (i % 4 == 0))) m |= random_extra_digit(full, m, rng);
+            } else if (i >= 4 || (large_geom && (i % 3 == 0))) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            if (kind == PatternKind::MutantLike && i >= 5) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::SwordfishLike || kind == PatternKind::JellyfishLike || kind == PatternKind::FinnedFishLike) {
+        const uint64_t core = random_digit_mask(topo.n, 2, rng);
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = core;
+            if (kind == PatternKind::JellyfishLike && (i >= 9 || (large_geom && (i % 4 == 0)))) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            if (kind == PatternKind::FinnedFishLike && (i >= 4 || (i % 3 == 0))) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::AlsLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i % 3 == 0) ? (mask_a | mask_b) : (mask_b | mask_c);
+            if (std::popcount(m) < 3) m |= random_extra_digit(full, m, rng);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::ExclusionLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i & 1) ? mask_a : mask_b;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::AicLike || kind == PatternKind::GroupedAicLike ||
+        kind == PatternKind::GroupedCycleLike || kind == PatternKind::NiceLoopLike ||
+        kind == PatternKind::XChainLike || kind == PatternKind::XYChainLike) {
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i & 1) ? mask_a : mask_b;
+            if (kind == PatternKind::GroupedAicLike || kind == PatternKind::NiceLoopLike || (i % 3 == 0)) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            if (kind == PatternKind::GroupedCycleLike && (i % 2 == 0)) {
+                m = mask_a;
+            }
+            if (kind == PatternKind::XYChainLike && (i % 2 == 1)) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::EmptyRectangleLike) {
+        const uint64_t core = random_digit_mask(topo.n, 2, rng);
+        const uint64_t support = (core | random_extra_digit(full, core, rng)) & full;
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = (i < 3) ? core : support;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    if (kind == PatternKind::RemotePairsLike) {
+        const uint64_t pair = random_digit_mask(topo.n, 2, rng);
+        const uint64_t flex = (pair | random_extra_digit(full, pair, rng)) & full;
+        for (int i = 0; i < sc.anchor_count; ++i) {
+            uint64_t m = ((i & 1) == 0) ? pair : flex;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        }
+        return;
+    }
+    // Domyślnie Chain
+    for (int i = 0; i < sc.anchor_count; ++i) {
+        uint64_t m = (i & 1) ? mask_a : mask_b;
+        if (large_geom && (i % 3 == 2)) {
+            m |= random_extra_digit(full, m, rng);
+        }
+        sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+    }
+}
+
+// Główna funkcja orkiestratora
+inline bool build_seed(
+    const GenericTopology& topo,
+    const GenerateRunConfig& cfg,
+    RequiredStrategy required_strategy,
+    int difficulty_level_required,
+    std::mt19937_64& rng,
+    PatternSeedView& out) {
+    
+    out = {};
+    if (!cfg.pattern_forcing_enabled) return false;
+
+    int forcing_level = std::clamp(difficulty_level_required, 1, 8);
+    if (cfg.max_pattern_depth > 0) {
+        forcing_level = std::min(forcing_level, cfg.max_pattern_depth);
+        forcing_level = std::clamp(forcing_level, 1, 8);
+    }
+
+    PatternKind kind = pick_kind(required_strategy, forcing_level);
+    if (kind == PatternKind::None) return false;
+
+    PatternScratch& sc = tls_pattern_scratch();
+    sc.reset(topo);
+    PatternMutationState& mutation = tls_pattern_mutation_state();
+    if (mutation.strategy != required_strategy || mutation.kind != kind) {
+        mutation.reset(required_strategy, kind);
+    }
+
+    ExactPatternTemplatePlan exact_plan{};
+    PatternKind exact_kind = PatternKind::None;
+    int exact_score = -1;
+    PatternMutationSource selected_source = PatternMutationSource::Random;
+    int score_delta = 0;
+    int selected_strength = 0;
+    int adaptive_target_strength = 0;
+    const bool exact_matched =
+        try_exact_templates_for_level(topo, required_strategy, forcing_level, rng, exact_plan, exact_kind, &exact_score);
+
+    if (mutation.have_last && mutation.strategy == required_strategy && mutation.kind == kind &&
+        mutation.last_plan.valid && (mutation.failure_streak > 0 || mutation.zero_use_streak > 0)) {
+        ExactPatternTemplatePlan mutated = mutation.last_plan;
+        const int strength = adaptive_mutation_strength(
+            required_strategy, mutation.zero_use_streak, mutation.failure_streak, PatternMutationSource::Last);
+        adaptive_target_strength = std::max(adaptive_target_strength, strength);
+        if (mutate_exact_template_for_family(topo, required_strategy, mutated, rng, strength)) {
+            const int mutated_score = score_exact_plan(topo, required_strategy, kind, mutated);
+            if (mutated_score >= std::max(exact_score - 6, 0)) {
+                exact_plan = mutated;
+                exact_kind = kind;
+                exact_score = mutated_score;
+                selected_source = PatternMutationSource::Last;
+                score_delta = mutated_score - std::max(0, mutation.last_score);
+                selected_strength = strength;
+            }
+        }
+    }
+    if (mutation.have_best && mutation.strategy == required_strategy && mutation.kind == kind &&
+        mutation.best_plan.valid && mutation.zero_use_streak >= 2) {
+        ExactPatternTemplatePlan mutated = mutation.best_plan;
+        const int strength = adaptive_mutation_strength(
+            required_strategy, mutation.zero_use_streak, mutation.failure_streak, PatternMutationSource::Best);
+        adaptive_target_strength = std::max(adaptive_target_strength, strength);
+        if (mutate_exact_template_for_family(topo, required_strategy, mutated, rng, strength)) {
+            const int mutated_score = score_exact_plan(topo, required_strategy, kind, mutated);
+            if (mutated_score > exact_score) {
+                exact_plan = mutated;
+                exact_kind = kind;
+                exact_score = mutated_score;
+                selected_source = PatternMutationSource::Best;
+                score_delta = mutated_score - std::max(0, mutation.best_score);
+                selected_strength = strength;
+            }
+        }
+    }
+
+    // Aplikacja masek z Exact Planu (jeśli się udał)
+    if ((exact_matched || exact_score >= 0) && exact_plan.valid && exact_plan.anchor_count > 0) {
+        sc.exact_template = true;
+        sc.template_score = exact_score;
+        for (int i = 0; i < exact_plan.anchor_count; ++i) {
+            const int idx = exact_plan.anchor_idx[static_cast<size_t>(i)];
+            if (!sc.add_anchor(idx)) continue;
+
+            uint64_t mask = exact_plan.anchor_masks[static_cast<size_t>(i)];
+            if (mask == 0ULL) mask = pf_full_mask_for_n(topo.n);
+            
+            sc.allowed_masks[static_cast<size_t>(idx)] = mask;
+            sc.anchor_masks[static_cast<size_t>(i)] = mask;
+        }
+
+        // Chronione komórki zapobiegają ich usunięciu przez MCTS Digger
+        if (cfg.pattern_forcing_lock_anchors) {
+            protect_pattern_skeleton_cells(topo, sc);
+        }
+        
+        if (sc.anchor_count > 0) {
+            mutation.strategy = required_strategy;
+            mutation.kind = (exact_kind == PatternKind::None) ? kind : exact_kind;
+            mutation.have_last = true;
+            mutation.last_plan = exact_plan;
+            mutation.last_score = exact_score;
+            if (!mutation.have_best || exact_score > mutation.best_score) {
+                mutation.have_best = true;
+                mutation.best_plan = exact_plan;
+                mutation.best_score = exact_score;
+            }
+            out.kind = (exact_kind == PatternKind::None) ? kind : exact_kind;
+            out.seed_puzzle = &sc.seed_puzzle;
+            out.allowed_masks = &sc.allowed_masks;
+            out.protected_cells = &sc.protected_cells;
+            out.anchor_idx = sc.anchors.data();
+            out.anchor_masks = sc.anchor_masks.data();
+            out.anchor_count = sc.anchor_count;
+            out.exact_template = sc.exact_template;
+            out.template_score = sc.template_score;
+            out.best_template_score = mutation.best_score;
+            out.template_score_delta = score_delta;
+            out.mutation_strength = selected_strength;
+            out.planner_zero_use_streak = mutation.zero_use_streak;
+            out.planner_failure_streak = mutation.failure_streak;
+            out.adaptive_target_strength = adaptive_target_strength;
+            out.mutation_source = selected_source;
+            return true;
+        }
+    }
+
+    // Fallback: luźne kotwice (jeśli Exact Plan zawiódł z powodu asymetrii lub P1-P6)
+    bool ok = false;
+    switch (kind) {
+        case PatternKind::ExocetLike:
+            ok = build_exocet_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::LoopLike:
+            ok = build_loop_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::ColorLike:
+            ok = build_color_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::PetalLike:
+            ok = build_petal_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::IntersectionLike:
+            ok = build_intersection_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::FishLike:
+            ok = build_fish_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::FrankenLike:
+            ok = build_franken_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::MutantLike:
+            ok = build_mutant_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::SquirmLike:
+            ok = build_squirm_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::SwordfishLike:
+        case PatternKind::JellyfishLike:
+        case PatternKind::FinnedFishLike:
+            ok = build_fish_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::AlsLike:
+            ok = build_als_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::ExclusionLike:
+            ok = build_exclusion_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::AicLike:
+            ok = build_aic_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::GroupedAicLike:
+            ok = build_grouped_aic_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::GroupedCycleLike:
+            ok = build_grouped_cycle_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::NiceLoopLike:
+            ok = build_niceloop_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::XChainLike:
+            ok = build_aic_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::XYChainLike:
+            ok = build_niceloop_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::EmptyRectangleLike:
+            ok = build_empty_rectangle_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::RemotePairsLike:
+            ok = build_remote_pairs_like_anchors(topo, sc, rng);
+            break;
+        case PatternKind::ForcingLike:
+        case PatternKind::Chain:
+            ok = build_chain_anchors(topo, sc, rng);
+            break;
+        default:
+            break;
+    }
+    
+    if (!ok || sc.anchor_count <= 0) return false;
+
+    int anchor_target = cfg.pattern_forcing_anchor_count > 0
+        ? cfg.pattern_forcing_anchor_count
+        : default_anchor_count(topo, kind);
+    anchor_target = std::clamp(anchor_target, sc.anchor_count, std::min(topo.nn, 32));
+
+    // Dopełnianie luźnymi cyframi
+    int guard = 0;
+    while (sc.anchor_count < anchor_target && guard < topo.nn * 4) {
+        ++guard;
+        const int idx = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
+        sc.add_anchor(idx);
+    }
+
+    apply_anchor_masks(topo, sc, kind, rng);
+    for (int i = 0; i < sc.anchor_count; ++i) {
+        const int idx = sc.anchors[static_cast<size_t>(i)];
+        sc.anchor_masks[static_cast<size_t>(i)] = sc.allowed_masks[static_cast<size_t>(idx)];
+    }
+    
+    if (cfg.pattern_forcing_lock_anchors) {
+        protect_pattern_skeleton_cells(topo, sc);
+    }
+
+    out.kind = kind;
+    out.seed_puzzle = &sc.seed_puzzle;
+    out.allowed_masks = &sc.allowed_masks;
+    out.protected_cells = &sc.protected_cells;
+    out.anchor_idx = sc.anchors.data();
+    out.anchor_masks = sc.anchor_masks.data();
+    out.anchor_count = sc.anchor_count;
+    out.exact_template = false;
+    out.template_score = 0;
+    out.best_template_score = mutation.best_score;
+    out.template_score_delta = 0;
+    out.mutation_strength = 0;
+    out.planner_zero_use_streak = mutation.zero_use_streak;
+    out.planner_failure_streak = mutation.failure_streak;
+    out.adaptive_target_strength = adaptive_target_strength;
+    out.mutation_source = PatternMutationSource::Random;
+    return true;
+}
+
+} // namespace sudoku_hpc::pattern_forcing

@@ -1,4 +1,6 @@
-﻿#pragma once
+﻿//Author copyright Marcin Matysek (Rewertyn)
+
+#pragma once
 
 #include <chrono>
 #include <filesystem>
@@ -8,6 +10,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace sudoku_hpc {
 
@@ -27,10 +30,18 @@ public:
             name << "sudoku_debug_"
                  << std::put_time(&tm, "%Y%m%d_%H%M%S")
                  << ".log";
-            path_ = (std::filesystem::current_path() / name.str()).string();
+            const std::filesystem::path debug_dir = std::filesystem::current_path() / "Debugs";
+            std::filesystem::create_directories(debug_dir);
+            path_ = (debug_dir / name.str()).string();
             stream_.open(path_, std::ios::out | std::ios::app);
         } catch (...) {
-            path_ = "sudoku_debug.log";
+            try {
+                const std::filesystem::path debug_dir = std::filesystem::current_path() / "Debugs";
+                std::filesystem::create_directories(debug_dir);
+                path_ = (debug_dir / "sudoku_debug.log").string();
+            } catch (...) {
+                path_ = "Debugs\\sudoku_debug.log";
+            }
             stream_.open(path_, std::ios::out | std::ios::app);
         }
     }
@@ -54,6 +65,7 @@ public:
 #endif
         stream_ << std::put_time(&tm, "%Y-%m-%d %H:%M:%S")
                 << " [" << level << "] "
+                << "[tid=" << std::this_thread::get_id() << "] "
                 << "(" << scope << ") "
                 << msg
                 << "\n";

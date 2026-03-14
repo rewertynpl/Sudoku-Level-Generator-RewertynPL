@@ -1,7 +1,10 @@
-﻿#pragma once
+﻿//Author copyright Marcin Matysek (Rewertyn)
+
+#pragma once
 
 #include <algorithm>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "geometry.h"
@@ -26,9 +29,9 @@ struct GenericThreadScratch {
 };
 
 inline GenericThreadScratch& generic_tls_for(const GenericTopology& topo) {
-    thread_local GenericThreadScratch scratch;
-    scratch.ensure(topo);
-    return scratch;
+    thread_local GenericThreadScratch* scratch = new GenericThreadScratch();
+    scratch->ensure(topo);
+    return *scratch;
 }
 
 struct GenericBoard {
@@ -141,7 +144,7 @@ struct GenericBoard {
         return (~used) & full_mask;
     }
 
-    bool init_from_puzzle(const std::vector<uint16_t>& puzzle, bool allow_invalid) {
+    bool init_from_puzzle(std::span<const uint16_t> puzzle, bool allow_invalid) {
         if (topo == nullptr) {
             return false;
         }
@@ -164,6 +167,15 @@ struct GenericBoard {
         }
         return true;
     }
+
+    bool init_from_puzzle(const std::vector<uint16_t>& puzzle, bool allow_invalid) {
+        return init_from_puzzle(std::span<const uint16_t>(puzzle.data(), puzzle.size()), allow_invalid);
+    }
 };
+
+inline GenericBoard& generic_tls_board() {
+    thread_local GenericBoard* board = new GenericBoard();
+    return *board;
+}
 
 } // namespace sudoku_hpc

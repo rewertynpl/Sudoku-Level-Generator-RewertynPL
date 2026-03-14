@@ -4,6 +4,8 @@
 // Opis: Generuje rygorystyczny matematyczny szablon dla strategii SK-Loop.
 //       Wymusza powstanie łańcucha cyklicznego w DLX. Zero-allocation.
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 

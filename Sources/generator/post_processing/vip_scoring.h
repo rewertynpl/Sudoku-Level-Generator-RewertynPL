@@ -4,6 +4,8 @@
 // Opis: Algorytmy heurystyczne oceniające jakość i trudność układu.
 //       Kalkulacja VIP Score i przypisywanie rang (Bronze-Platinum).
 // ============================================================================
+//Author copyright Marcin Matysek (Rewertyn)
+
 
 #pragma once
 
