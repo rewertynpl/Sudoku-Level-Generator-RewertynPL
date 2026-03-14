@@ -1,23 +1,337 @@
-//Author Marcin Matysek (Rewertyn)Act as a Principal C++ Performance Engineer, Graph Theory Expert, and HPC Systems Architect. You specialize in solving NP-complete problems (Constraint Satisfaction Problems) using the C++20 standard, L1-cache optimization, bitboards, and lock-free concurrency.Your task is to implement all Sudoku solving strategies (from Level 1 to Level 7, with optional Backtracking support at Level 8) and integrate the "Pattern Forcing" and "Heuristic MCTS Digger" systems for a highly optimized Sudoku generator and certifier.You are required to rewrite generator.h and logic_certify.h from scratch, breaking them down into smaller files, and propose new names for them.SYSTEM CONTEXT AND STRICT CONSTRAINTS:The system operates on grids ranging from N=4 (4x4) up to N=64 (64x64).ASYMMETRIC geometries are supported (e.g., a 12x12 board with 4x3 blocks, 10x10 with 2x5 blocks). The code MUST NOT assume that box_rows == box_cols.We use 64-bit masks (uint64_t) to represent candidates, where bit 0 represents the digit 1, bit 1 represents the digit 2, etc. (1ULL << (d - 1)).ZERO-ALLOCATION POLICY: Inside the solver loop (in logic functions), it is STRICTLY FORBIDDEN to use std::vector, std::set, std::map, new, or std::deque. For graph operations, BFS queues, MCTS trees, and structure lists (e.g., ALS), you must exclusively use the pre-allocated ExactPatternScratchpad buffer placed in thread_local memory, or local flat arrays on the stack (C-style arrays).Bitwise optimization: extensive use of std::popcount and std::countr_zero instead of loops.DATA STRUCTURES YOU MUST ADAPT TO:st.topo->n (board size), st.topo->nn (number of cells), st.topo->box_rows, st.topo->box_cols.st.topo->cell_row[idx], st.topo->cell_col[idx], st.topo->cell_box[idx].st.topo->peer_offsets[idx] and st.topo->peers_flat[p] (for iterating over "visible" peer cells).st.board->values[idx] - the value entered in a cell (0 if empty).st.cands[idx] - bitmask (uint64_t) of current candidates in a cell.st.eliminate(idx, mask) - method to remove candidates. Returns ApplyResult::Progress, NoProgress, or Contradiction.ExactPatternScratchpad - global thread buffer. It contains structures for BFS (bfs_queue, bfs_depth, bfs_path, visited), a flat als_list[] array of type ALS (cell_mask, digit_mask, size, degree, house), as well as space for Strong/Weak links graphs used in chains.KNOWN BUGS TO AVOID (Architecture Context):I have already fixed the following bugs in the main code; do not break them:PersistentThreadPool had a race/missed wake-up (now seen_epoch starts from 0).The workers' main loop checked the time every 1024 iterations (now it checks every iteration).Reseed used the same state (now worker_seed_state is updated before the reseed).The --max-attempts and --time-limit-s limits are correctly respected.Spinning on remaining.wait(0) has been changed to the correct wait(rem).LIST OF STRATEGIES TO IMPLEMENT (CONTRACT):🟢 1. Easy (Level 1)P1a: Naked Single, Hidden SingleP2b: Pointing Pairs/Triples, Box/Line Reduction (Intersection Removal)🟡 2. Medium (Level 2)P2: Naked Pair, Hidden Pair, Naked Triple, Hidden Triple🟠 3. Hard (Level 3)P3: Naked Quad, Hidden Quad, X-Wing, Y-Wing (XY-Wing), Skyscraper, 2-String Kite, Empty Rectangle, Remote Pairs🔴 4. Expert (Level 4)P4: Swordfish, XYZ-Wing, Finned X-Wing/Sashimi, Unique Rectangle (Type 1), BUG+1, W-Wing, Simple Coloring🟣 5. Diabolical (Level 5)P5: Jellyfish, WXYZ-Wing, Finned Swordfish/Jellyfish, X-Chain, XY-Chain, ALS-XZ, Unique Loop, Avoidable Rectangle, Bivalue Oddagon, Extended Unique Rectangles (Types 2-6 and Hidden UR), BUG Variants (Types 2, 3, 4), Borescoper's / Qiu's Deadly Pattern⚫ 6. Nightmare (Level 6)P6: 3D Medusa, AIC/Grouped AIC, Grouped X-Cycle, Continuous Nice Loop, ALS-XY-Wing, ALS-Chain, Sue de Coq, Death Blossom, Franken/Mutant Fish, Kraken Fish, Squirmbag (Starfish), Aligned Pair/Triple Exclusion (APE/ATE), ALS-AIC👽 7. Theoretical (Level 7)P7: MSLS, Exocet/Senior Exocet, SK Loop, Pattern Overlay Method, Forcing Chains, Dynamic Forcing Chains💻 8. Brute Force (Level 8)P8: Backtracking (The DLX solver is already implemented, you do not need to write it).RULES FOR STRATEGY CODE:Each function must have a precise signature (or be called by a function with this signature):ApplyResult apply_STRATEGY_NAME(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r)For Levels 6 and 7, the implementation of chains must be based on BFS over the strong/weak links graph implemented on the ExactPatternScratchpad. For techniques utilizing ALS, use the precompiled function that creates the flat als_list array.Performance above all else. Avoid nested loops over the entire board $O(N^6)$ if you can isolate candidates using row/column bitboards.Apply generalized mathematics: instead of hardcoding box_size = 3, use st.topo->box_rows and st.topo->box_cols. For Fishes and Wings, fully utilize st.topo->n.Proxy Mode vs Exact Mode: Remember that for the heaviest strategies (Level 6 and 7), the implementation must rely on BFS searches over the Strong and Weak links graph using flat arrays from ExactPatternScratchpad.Utilize ALS structures for techniques like Sue de Coq, ALS-XZ, ALS-XY-Wing. Assume that the build_als_list(st, scratch) function generates a flat array of all identified Almost Locked Sets for the current board state.C++// MODE CONFIGURATION (WHITE-BOX vs BLACK-BOX)
+// Author: Marcin Matysek (Rewertyn)
+
+Act as a Principal C++ Performance Engineer, Graph Theory Expert, and HPC Systems Architect. You specialize in solving NP-Complete problems (Constraint Satisfaction Problems) using the C++20 standard, L1-cache optimization, bitboards, and lock-free concurrency.
+
+Your task is to implement all Sudoku solving strategies (from Level 1 to Level 7, optionally supporting Backtracking at Level 8) and to integrate a "Pattern Forcing" and "Heuristic MCTS Digger" system for a highly optimized Sudoku generator and certifier.
+
+You are required to rewrite generator.h and logic_certify.h from scratch, break them down into smaller components, and propose new names for them.
+
+SYSTEM CONTEXT AND RIGOROUS CONSTRAINTS:
+Grid Sizes: The system operates on grids from N=4 (4x4) up to N=64 (64x64).
+
+Asymmetric Geometries: ASYMMETRIC geometries are supported (e.g., a 12x12 board with 4x3 boxes, 10x10 with 2x5 boxes). The code MUST NOT assume that box_rows == box_cols.
+
+Bitwise Representation: We use 64-bit masks (uint64_t) to represent candidates, where bit 0 is digit 1, bit 1 is digit 2, etc. (1ULL << (d - 1)).
+
+ZERO-ALLOCATION POLICY: Inside the solver loop (in logic functions), it is STRICTLY FORBIDDEN to use std::vector, std::set, std::map, new, or std::deque. For graph operations, BFS queues, MCTS trees, and lists of structures (e.g., ALS), you must exclusively use a pre-allocated ExactPatternScratchpad buffer placed in thread_local memory, or local flat arrays on the stack (C-style arrays).
+
+Bitwise Optimization: Extensive use of std::popcount and std::countr_zero instead of loops.
+
+DATA STRUCTURES YOU MUST ADAPT TO:
+st.topo->n (board size), st.topo->nn (number of cells), st.topo->box_rows, st.topo->box_cols.
+
+st.topo->cell_row[idx], st.topo->cell_col[idx], st.topo->cell_box[idx].
+
+st.topo->peer_offsets[idx] and st.topo->peers_flat[p] (for iterating over "seeing" cells).
+
+st.board->values[idx] - the value entered in a cell (0 if empty).
+
+st.cands[idx] - bitmask (uint64_t) of current candidates in the cell.
+
+st.eliminate(idx, mask) - method to remove candidates. Returns ApplyResult::Progress, NoProgress, or Contradiction.
+
+ExactPatternScratchpad - global thread buffer. It contains structures for BFS (bfs_queue, bfs_depth, bfs_path, visited), a flat array als_list[] of type ALS (cell_mask, digit_mask, size, degree, house), and space for Strong/Weak link graphs used in chains.
+
+KNOWN BUGS TO AVOID (Architecture Context):
+I have already fixed the following bugs in the main code; do not break them:
+
+PersistentThreadPool had a race/missed wake-up (now seen_epoch starts at 0).
+
+The workers' main loop checked the time every 1024 iterations (now it checks every iteration).
+
+Reseed used the same state (now worker_seed_state is updated before reseeding).
+
+The --max-attempts and --time-limit-s limits are properly respected.
+
+Spinning on remaining.wait(0) has been changed to the correct wait(rem).
+
+LIST OF STRATEGIES TO IMPLEMENT (CONTRACT):
+🟢 1. Easy (Level 1)
+P1a: Naked Single, Hidden Single
+P2b: Pointing Pairs/Triples, Box/Line Reduction (Intersection Removal)
+
+🟡 2. Medium (Level 2)
+P2: Naked Pair, Hidden Pair, Naked Triple, Hidden Triple
+
+🟠 3. Hard (Level 3)
+P3: Naked Quad, Hidden Quad, X-Wing, Y-Wing (XY-Wing), Skyscraper, 2-String Kite, Empty Rectangle, Remote Pairs
+
+🔴 4. Expert (Level 4)
+P4: Swordfish, XYZ-Wing, Finned X-Wing/Sashimi, Unique Rectangle (Type 1), BUG+1, W-Wing, Simple Coloring
+
+🟣 5. Diabolical (Level 5)
+P5: Jellyfish, WXYZ-Wing, Finned Swordfish/Jellyfish, X-Chain, XY-Chain, ALS-XZ, Unique Loop, Avoidable Rectangle, Bivalue Oddagon, Extended Unique Rectangles (Types 2-6 and Hidden UR), BUG Variants (Types 2, 3, 4), Borescoper's / Qiu's Deadly Pattern
+
+⚫ 6. Nightmare (Level 6)
+P6: 3D Medusa, AIC/Grouped AIC, Grouped X-Cycle, Continuous Nice Loop, ALS-XY-Wing, ALS-Chain, Sue de Coq, Death Blossom, Franken/Mutant Fish, Kraken Fish, Squirmbag (Starfish), Aligned Pair/Triple Exclusion (APE/ATE), ALS-AIC
+
+👽 7. Theoretical (Level 7)
+P7: MSLS, Exocet/Senior Exocet, SK Loop, Pattern Overlay Method, Forcing Chains, Dynamic Forcing Chains
+
+💻 8. Brute Force (Level 8)
+P8: Backtracking (The DLX solver is already implemented, you don't need to write it).
+
+RULES FOR STRATEGY CODE:
+Every function must have a precise signature (or be called by a function with this signature):
+ApplyResult apply_STRATEGY_NAME(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r)
+
+For Levels 6 and 7, chain implementation must rely on BFS over a strong/weak link graph implemented on the ExactPatternScratchpad. For techniques using ALS, use the precompiled function that creates the flat als_list.
+
+Performance above all. Avoid nested loops over the entire board O(N^6) if you can isolate candidates using row/column bitboards.
+
+Apply generalized math: Instead of hardcoding box_size = 3, use st.topo->box_rows and st.topo->box_cols. For Fish and Wings, fully utilize st.topo->n.
+
+Proxy Mode vs. Exact Mode: Remember that for the heaviest strategies (Levels 6 and 7), the implementation must rely on BFS searches over Strong and Weak link graphs using flat arrays from the ExactPatternScratchpad.
+
+Leverage ALS structures for techniques like Sue de Coq, ALS-XZ, ALS-XY-Wing. Assume that the build_als_list(st, scratch) function generates a flat array of all identified Almost Locked Sets for the current board state.
+
+C++
+// MODE CONFIGURATION (WHITE-BOX vs BLACK-BOX)
 // Set to 0 if you want 100% exact structural patterns (slower, certifies rigorously).
 // Set to 1 if you want raw power with Fast Implication Proxy (fast, uses links as shortcuts).
 #ifndef SUDOKU_USE_PROXY_STRATEGIES
 #define SUDOKU_USE_PROXY_STRATEGIES 0
 #endif
-NEW BOARD GENERATION PARADIGM (PATTERN FORCING MODULES):Standard digging from a random full board and hoping to roll a P8 strategy takes years. Implement an innovative generation system:MODULE 1: EXACT PATTERN FORCING (Geometric Template Generator)Define coordinate structures for Level 8 techniques (e.g., define Base Cells, Target Cells, and Cross Cells for Exocet; determine vertices for SK Loop; set up chains for Forcing Chains).Inject (plant) specific candidate masks into an empty board (imposing a mathematical structure template).Use dlx_solver.solve_and_capture(...) to solve the rest of the board around the imposed template. This guarantees a 100% Hit Rate for the existence of the starting logic.MODULE 2: LOGICAL BOTTLENECK DIGGER (MCTS UCB1 Digger)The digging algorithm evaluates nodes (removed cells) using Monte Carlo Tree Search (UCB1), providing rewards for creating advanced chains (e.g., X-Chain, ALS).It features a Basic Logical Solver (calibrated for P1-P5). The Digger removes digits (prioritizing those outside the injected template from Module 1). It will stop and secure the Bottleneck when the Basic Logical Solver GETS STUCK, but DLX still confirms 1 unique solution.MODULE 3: VERIFICATIONAt the end, the board is passed through the full Certifier (Levels 1-7) to ensure the puzzle is unsolvable without the chosen P5/P6/P7 technique and that it is 100% logically consistent with it.
+NEW BOARD GENERATION PARADIGM (PATTERN FORCING MODULES):
+Standard digging from a random full board and hoping to roll a P8 strategy takes years. Implement an innovative generation system:
+
+MODULE 1: EXACT PATTERN FORCING (Geometric Template Generator)
+
+Define coordinate structures for Level 8 techniques (e.g., define Base Cells, Target Cells, and Cross Cells for an Exocet; designate vertices for an SK Loop; set up chains for Forcing Chains).
+
+Inject (plant) specific candidate masks into an empty board (imposing the mathematical template of the structure).
+
+Use dlx_solver.solve_and_capture(...) to solve the rest of the board around the imposed template. This guarantees a 100% Hit Rate for the existence of the starting logic.
+
+MODULE 2: LOGICAL BOTTLENECK DIGGER (MCTS UCB1 Digger)
+
+The digging algorithm evaluates nodes (removed cells) using Monte Carlo Tree Search (UCB1), giving rewards for creating advanced chains (e.g., X-Chain, ALS).
+
+It possesses a Basic Logical Solver (calibrated for P1-P5). The Digger removes digits (prioritizing those outside the injected template from Module 1). It will stop and secure the Bottleneck when the Basic Logical Solver STUCKS, but the DLX still confirms 1 unique solution.
+
+MODULE 3: VERIFICATION
+
+Finally, the board is run through the full Certifier (Levels 1-7) to ensure the puzzle is unsolvable without the selected P5/P6/P7 technique and is 100% logically consistent with it.
+
+BEWARE OF THESE PARADOXES:
+A) The ultimate Catch-22 in generating Level 8 (Theoretical) puzzles from extremely opposite sides of the barricade (Generator vs. Certifier).
+
+Side A: The Certifier's Perspective (Why I advised a SPARSE grid):
+
+Problem: Naked Single eats your board.
+
+What is happening? The grid is so dense (has so many clues) that the simplest Level 1 function (apply_naked_single) solves the entire Sudoku with its eyes closed. The engine enters the Certifier, sees a dense board, fires P1, gets basic.solved = true and exits. The code for P8 (POM / MSLS) is never even called because there is no bottleneck.
+
+Side B: The Generator's Computational Perspective (Why the other window advised a DENSE grid):
+
+Problem: Combinatorial Explosion (NP-Hard Complexity).
+
+What is happening? Strategies like the Pattern Overlay Method (POM) rely on overlaying all possible legal placements for a given digit. If the grid is sparse (e.g., 20 clues on a 9x9), the number of legal overlays for one digit runs into the hundreds of thousands. If you run POM on this, your CPU will choke, RAM will run out, and the probe_budget and pattern_cap limits (which are hardcoded in your code) will be exhausted instantly, returning ApplyResult::NoProgress (logical timeout).
+
+How to solve this Paradox? (Architectural Solution):
+You are at a dead end:
+
+Grid is too sparse 👉 POM/MSLS explodes due to computational limits and returns NoProgress.
+
+Grid is too dense 👉 Naked Single solves everything immediately and returns basic.solved, bypassing POM/MSLS.
+
+The solution in HPC architectures is not to choose one of the extremes, but The Goldilocks Zone of density combined with strict structure protection.
+
+Modify the "Clue Ceiling" to an intermediate value (approx. 35% - 48%). You cannot use 70-80% (because of Naked Singles), nor 22% (because the graph will explode).
+
+The Digger MCTS must protect the "Blind Spots" (Dead Zones).
+
+B) The "Self-Destructing Patterns" Problem
+This is the second of the two hardest problems in reverse Sudoku generation engines (MCTS + DLX). You have collided with the problem of "Self-Destructing Patterns" in the Generator.
+Practically 100% of the board was solved by the simplest strategy in the world—Naked Single (Level 1)! The board never "got stuck", so the certifier NEVER reached Level 6, where your ALS-XZ is located. Since the certifier never got there, the function wasn't called at all, hence use: 0.
+
+C) Strategy Overshadowing
+In advanced Sudoku engines, this is called "Strategy Overshadowing". The problem lies in the execution order of the strategies.
+Mathematically, ALS-XZ is nothing more than a specific type of chain (often equivalent to an XY-Chain or a short AIC). In your code, at Level 6, the very generic and powerful X-Chain and XY-Chain are called BEFORE ALS-XZ.
+When the solver encounters the ALS-XZ pattern injected by the generator, the XY-Chain immediately recognizes it as a bivalue chain, makes eliminations, and returns Progress. The certifier loop starts anew, and the apply_als_xz function is never even called (hence use: 0). The certifier states the puzzle was solved using XY-Chain, and the ALS-XZ contract is rejected.
+How to fix it?
+For the algorithms to work correctly, we must always run "Named Structures" (Specific Templates) before "General Graph Chains" (Generic Templates). We must swap the order in sudoku_logic_engine.h for Levels 6 and 7.
+
+📂 Proposed Project Structure (Directory Tree)
+1. Base Directory and Tools (Core)
+
+Plaintext
+Sources/
+├── config/
+│   ├── sudoku_types.h         // 64-bit masks, geometry constants.
+│   ├── run_config.h           // GenerateRunConfig, input parameters.
+│   └── bit_utils.h            // std::popcount, std::countr_zero, popcount AVX2/AVX512.
+├── core/
+│   ├── geometry.h             // Asymmetric logic (box_rows != box_cols), cell mapping.
+│   ├── board.h                // GenericBoard, 'values' arrays, full/used masks.
+│   └── candidate_state.h      // State st.cands, st.eliminate(), st.keep_only(). (ZERO-ALLOC).
+2. Logic Engine - Sources/logic/
+We are abandoning part01..05. Every strategy lands in a separate file for easier management and profiling.
+
+Plaintext
+Sources/logic/
+├── sudoku_logic_engine.h      // Main controller (GenericLogicCertify). Delegates calls to modules.
+├── logic_result.h             // GenericLogicCertifyResult, StrategyStats, enum StrategySlot.
+│
+├── shared/                    // Modules shared by strategies (ZERO-ALLOC, on thread buffer)
+│   ├── exact_pattern_scratchpad.h // Main thread_local buffer for BFS, graphs, ALS.
+│   ├── als_builder.h              // Almost Locked Sets search (P6-P7).
+│   └── link_graph_builder.h       // Building strong/weak graph links (Chains).
+│
+├── p1_easy/
+│   ├── naked_single.h
+│   └── hidden_single.h
+│
+├── p2_intersections/
+│   ├── pointing_pairs.h
+│   └── box_line_reduction.h
+│
+├── p3_subsets/
+│   ├── naked_subsets.h        // Unified code for Naked Pair/Triple
+│   └── hidden_subsets.h       // Unified code for Hidden Pair/Triple
+│
+├── p4_hard/
+│   ├── quad_subsets.h         // Naked/Hidden Quad
+│   ├── fish_basic.h           // X-Wing, Swordfish (Unified matrix)
+│   ├── y_wing.h
+│   ├── skyscraper_kite.h      // Skyscraper and 2-String Kite (similar logic)
+│   ├── empty_rectangle.h
+│   └── remote_pairs.h         // Uses BFS on the pairs graph from the scratchpad
+│
+├── p5_expert/
+│   ├── finned_fish.h          // Finned X-Wing, Sashimi
+│   ├── simple_coloring.h
+│   ├── bug_plus_one.h
+│   ├── unique_rectangle_t1.h
+│   ├── w_wing.h
+│   └── xyz_wing.h
+│
+├── p6_diabolical/
+│   ├── jellyfish.h
+│   ├── chains_basic.h         // X-Chain, XY-Chain
+│   ├── wxyz_wing.h
+│   ├── finned_jelly_sword.h   // Finned Swordfish / Finned Jellyfish
+│   ├── als_xz.h
+│   ├── unique_loop.h
+│   ├── avoidable_rectangle.h
+│   ├── bivalue_oddagon.h
+│   ├── ur_extended.h          // Types 2-6 and Hidden UR
+│   ├── bug_variants.h         // Types 2-4
+│   └── borescoper_qiu.h
+│
+├── p7_nightmare/
+│   ├── medusa_3d.h
+│   ├── aic_grouped_aic.h      // Alternating Inference Chains
+│   ├── grouped_x_cycle.h
+│   ├── continuous_nice_loop.h
+│   ├── als_xy_wing_chain.h    // ALS-XY-Wing, ALS-Chain, ALS-AIC
+│   ├── sue_de_coq.h
+│   ├── death_blossom.h
+│   ├── franken_mutant_fish.h
+│   ├── kraken_fish.h
+│   ├── squirmbag.h
+│   └── aligned_exclusion.h    // APE and ATE
+│
+└── p8_theoretical/
+    ├── msls.h                 // Multi-Sector Locked Sets
+    ├── exocet_family.h        // Exocet, Senior Exocet
+    ├── sk_loop.h
+    ├── pattern_overlay.h      // POM (uses level8_scratchpad.h)
+    └── forcing_chains.h       // Forcing Chains, Dynamic Forcing Chains
+3. Generator and Pipeline Modules - Sources/generator/
+The old generator_pipeline_v2_impl.h is disintegrated into specialized components.
+
+Plaintext
+Sources/generator/
+├── generator_facade.h         // Main interface: run_generic_sudoku(). Glues the blocks below.
+│
+├── concurrency/
+│   ├── persistent_thread_pool.h // HPC Thread Pool. Fixed bugs: 'seen_epoch' from 0, 'wait(rem)'.
+│   └── telemetry_ring.h         // Lock-free MPSC queues for real-time metrics reporting.
+│
+├── core_engines/
+│   ├── dlx_solver.h           // Dancing Links Algorithm (Dancing Links X) with uniqueness limiting.
+│   ├── solved_kernel.h        // Generator for full, random, valid boards (MRV + AVX2/512).
+│   └── quick_prefilter.h      // Fast rejection of obviously invalid grids.
+│
+├── pattern_forcing/           // MODULE 1: P7 PATTERN INJECTION
+│   ├── pattern_planter.h      // Main injector.
+│   ├── template_exocet.h      // Geometry and target masks for Exocet.
+│   ├── template_sk_loop.h     // Geometry for SK-Loop.
+│   └── template_forcing.h     // Base for Forcing Chains.
+│
+├── mcts_digger/               // MODULE 2: BOTTLENECK DIGGER (LOGICAL BOTTLENECK DIGGER)
+│   ├── mcts_node.h            // Node structure for the Monte Carlo tree.
+│   ├── mcts_ucb_policy.h      // Functions calculating UCB1 with balance (Exploration vs Exploitation).
+│   └── bottleneck_digger.h    // Main digging logic and bottleneck searching via Basic Logic (L1-L4).
+│
+└── post_processing/           // MODULE 3: VERIFICATION AND METRICS
+    ├── quality_metrics.h      // Calculating entropy (log2 LUT), symmetry, distribution balance.
+    ├── vip_scoring.h          // Calculating VIP score, assigning ranks (Bronze-Platinum).
+    └── replay_validator.h     // Logical flow verification and cryptographic signatures.
+📝 Summary: What is in each component?
+Logic Engine (logic/ folder)
+
+Architectural Rule: The GenericLogicCertify class in sudoku_logic_engine.h is just a dispatcher. It contains a massive while (board.empty_cells != 0) loop and calls static functions like apply_x_wing(st, stats, result) sequentially, injecting a reference to CandidateState (the so-called st).
+
+Zero-Allocation: Strategy files (*.h) are not heap-instantiated classes. They are namespaces (namespace sudoku_hpc::logic::p4) or static inline functions. If a strategy needs a list of cells (e.g., finding nodes for Remote Pairs), it queries ExactPatternScratchpad& sp = exact_pattern_scratchpad(); from thread_local memory, which resets respective C-style arrays (sp.node_count = 0;).
+
+Flat Structures: Arrays like bfs_queue and als_list are preallocated to the maximum size for a 64x64 grid (MAX_NN = 4096).
+
+Module 1: Pattern Forcing (generator/pattern_forcing/)
+
+This is a game-changer for NP-hard Level 7 puzzles.
+
+Instead of blindly removing digits from a finished board, template_exocet.h "seeds" a mathematical structure (e.g., picks base a, b and targets x, y, forcing common candidate masks for them). Then dlx_solver.h steps in, treats these cells as "protected" with limited candidates, and fills the rest of the board with a valid solution in a fraction of a second. The Digger later cannot uncover the "protected" cells.
+
+This ensures the generated board has a guaranteed, built-in P8 pattern.
+
+Module 2: MCTS Bottleneck Digger (generator/mcts_digger/)
+
+Standard depth-first / random search is too slow for generating "Nightmare/Theoretical".
+
+bottleneck_digger.h treats the digit removal process like a game (like in AlphaGo). The game state is the current board with holes.
+
+The action is removing a pair/cell.
+
+Reward: If GenericLogicCertifyP1P5Modular (a solver with limited intellect) gets bogged down (can't solve it), but full DLX shows 1 unique solution, the node gets a massive reward. The MCTS tree guides the digger (UCB1 = exploit + explore) to pull digits that create logical bottlenecks.
+
+Threads and Concurrency (concurrency/persistent_thread_pool.h)
+
+Implements an "Extreme Low-Latency Thread Pool". Fixed bugs:
+
+Worker threads wait on std::atomic<uint64_t>::wait.
+
+The seen_epoch semaphore is updated before waking, preventing missed wake-ups.
+
+Thread reseeding updates the PRNG state in isolation, preventing generation collisions in the pool.
+
+What is "missing" in the system and requires expansion (Contract Analysis):
+Analyzing the current code and the requested contract:
+
+Complex Fish in asymmetric geometries (Franken/Mutant Fish): Algorithms in the old code assumed square blocks for fish fin intersections. In the refactoring, within p6_nightmare/franken_mutant_fish.h, you must use asymmetric st.topo->house_offsets, iterating jointly over rows, columns, and pre-calculated box masks.
+
+Dynamic Forcing Chains (P7): Forcing this to work in Zero-Allocation mode is very difficult in the old code because candidate states were allocated recursively. In p8_theoretical/dynamic_forcing_chains.h, we use a special state dump area in ExactPatternScratchpad (dyn_cands_backup[]), keeping the recursion logic strictly up to a depth of 2-4 (hardware limited) (CHANGE: different limitation to find as many sudokus as possible, it doesn't have to be strictly zero allocation, e.g., depth can be 2-8 if the laptop can handle it), which unlocks L1 Cache performance optionally.
+
+Missing Loops and Complex Modules: SK Loop (sk_loop.h) and MSLS (msls.h) are structurally very mathematically complex. Basing them on the ExactPatternScratchpad will drastically reduce the RAM footprint (GB/s alloc/dealloc spikes will vanish from the profiler).
+
+This breakdown will transform the system from hundreds of thousands of illegible lines in a single file into a precise, ultra-fast HPC framework compliant with C++20 specifications, meeting all "VIP Premium High-End Elite" requirements.
 
 HOW TO EXECUTE THE TASK (VERY IMPORTANT):
-Since there is a vast amount of code, do not try to generate it in a single output, because you will truncate the response. We will work iteratively. You will provide ready C++ code blocks, 1 full file at a time, complete for copy-pasting, with all functions 100% filled in, optimized for C++20 HPC.
+Because there is a massive amount of code, do not attempt to generate it in a single output, or you will truncate the response. We are working iteratively. You will deliver ready C++ code blocks, 1 full file at a time, complete for copy-pasting, 100% filled functions, optimized for C++20 HPC.
 
-To this message, reply ONLY with:
+First, file by file for:
+Sources/generator/
+├── pattern_forcing/            // MODULE 1: P7 PATTERN INJECTION
+├── pattern_planter.h       // Main injector.
+├── template_exocet.h       // Geometry and target masks for Exocet.
+├── template_sk_loop.h      // Geometry for SK-Loop.
+└── template_forcing.h      // Base for Forcing Chains.
+And then the rest of:
+Sources/generator/
 
-A brief confirmation of understanding the architecture rules (zero-allocation, flat arrays, MCTS/Pattern Forcing).
+To this message, respond ONLY with:
 
-A ready, complete plan.
+A short confirmation of understanding the architectural rules (zero-allocation, flat arrays, MCTS/Pattern Forcing).
 
-
-
-
-
-
-
+A ready, complete plan of action.
