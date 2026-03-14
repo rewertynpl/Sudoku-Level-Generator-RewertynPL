@@ -144,9 +144,31 @@ public:
         const int r2 = topo.cell_row[static_cast<size_t>(b2)];
         const int c2 = topo.cell_col[static_cast<size_t>(b2)];
 
-        // Cele krzyĹĽowe (Target Cells)
-        const int t1 = r1 * n + c2;
-        const int t2 = r2 * n + c1;
+        const int base_box = topo.cell_box[static_cast<size_t>(b1)];
+        const int br = base_box / topo.box_cols_count;
+        const int base_bc = base_box % topo.box_cols_count;
+        int target_bc = base_bc;
+        for (int g = 0; g < 32; ++g) {
+            const int cand_bc = static_cast<int>(rng() % static_cast<uint64_t>(topo.box_cols_count));
+            if (cand_bc == base_bc) continue;
+            target_bc = cand_bc;
+            break;
+        }
+        if (target_bc == base_bc) return false;
+
+        const int c0_target = target_bc * topo.box_cols;
+        const int tc1 = c0_target;
+        const int tc2 = c0_target + 1;
+        if (tc2 >= n) return false;
+
+        const int target_box = br * topo.box_cols_count + target_bc;
+        const int t1 = r1 * n + tc1;
+        const int t2 = r2 * n + tc2;
+        if (t1 == t2) return false;
+        if (topo.cell_box[static_cast<size_t>(t1)] != target_box ||
+            topo.cell_box[static_cast<size_t>(t2)] != target_box) {
+            return false;
+        }
 
         // Wybieramy cyfry dla komĂłrek bazowych i linii wspierajÄ…cych
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
@@ -185,15 +207,17 @@ public:
             plan.add_anchor(t2, soft_target_mask);
 
             for (int cc = 0; cc < n; ++cc) {
-                if (cc == c1 || cc == c2) continue;
+                if (cc == c1 || cc == c2 || cc == tc1 || cc == tc2) continue;
                 const int idx = r1 * n + cc;
-                if (topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(b1)]) continue;
+                const int ibox = topo.cell_box[static_cast<size_t>(idx)];
+                if (ibox == base_box || ibox == target_box) continue;
                 if (plan.add_skeleton(idx, soft_gate_mask)) break;
             }
             for (int rr = 0; rr < n; ++rr) {
                 if (rr == r1 || rr == r2) continue;
-                const int idx = rr * n + c2;
-                if (topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(b2)]) continue;
+                const int idx = rr * n + tc2;
+                const int ibox = topo.cell_box[static_cast<size_t>(idx)];
+                if (ibox == base_box || ibox == target_box) continue;
                 if (plan.add_skeleton(idx, soft_gate_mask)) break;
             }
         } else {
@@ -201,16 +225,18 @@ public:
             plan.add_anchor(t2, cross_mask & full);
             int added = 0;
             for (int cc = 0; cc < n && added < 1; ++cc) {
-                if (cc == c1 || cc == c2) continue;
+                if (cc == c1 || cc == c2 || cc == tc1 || cc == tc2) continue;
                 const int idx = r1 * n + cc;
-                if (topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(b1)]) continue;
+                const int ibox = topo.cell_box[static_cast<size_t>(idx)];
+                if (ibox == base_box || ibox == target_box) continue;
                 if (plan.add_skeleton(idx, row_gate_mask & full)) ++added;
             }
             added = 0;
             for (int rr = 0; rr < n && added < 1; ++rr) {
                 if (rr == r1 || rr == r2) continue;
-                const int idx = rr * n + c2;
-                if (topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(b2)]) continue;
+                const int idx = rr * n + tc2;
+                const int ibox = topo.cell_box[static_cast<size_t>(idx)];
+                if (ibox == base_box || ibox == target_box) continue;
                 if (plan.add_skeleton(idx, col_gate_mask & full)) ++added;
             }
         }

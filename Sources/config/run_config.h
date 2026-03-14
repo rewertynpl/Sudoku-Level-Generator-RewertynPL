@@ -616,6 +616,8 @@ inline bool strategy_prefers_relaxed_candidate_clue_window(RequiredStrategy requ
         case RequiredStrategy::XChain:
         case RequiredStrategy::XYChain:
         case RequiredStrategy::ALSXZ:
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::SimpleColoring:
         case RequiredStrategy::Medusa3D:
         case RequiredStrategy::AIC:
         case RequiredStrategy::GroupedAIC:
@@ -623,8 +625,6 @@ inline bool strategy_prefers_relaxed_candidate_clue_window(RequiredStrategy requ
         case RequiredStrategy::ContinuousNiceLoop:
         case RequiredStrategy::ALSXYWing:
         case RequiredStrategy::ALSChain:
-        case RequiredStrategy::SueDeCoq:
-        case RequiredStrategy::DeathBlossom:
         case RequiredStrategy::FrankenFish:
         case RequiredStrategy::MutantFish:
         case RequiredStrategy::KrakenFish:
@@ -632,8 +632,6 @@ inline bool strategy_prefers_relaxed_candidate_clue_window(RequiredStrategy requ
         case RequiredStrategy::AlignedPairExclusion:
         case RequiredStrategy::AlignedTripleExclusion:
         case RequiredStrategy::ALSAIC:
-        case RequiredStrategy::RemotePairs:
-        case RequiredStrategy::SimpleColoring:
             return true;
         default:
             return false;
@@ -643,12 +641,7 @@ inline bool strategy_prefers_relaxed_candidate_clue_window(RequiredStrategy requ
 inline bool strategy_prefers_relaxed_theoretical_clue_ceiling(RequiredStrategy required) {
     switch (required) {
         case RequiredStrategy::MSLS:
-        case RequiredStrategy::Exocet:
-        case RequiredStrategy::SeniorExocet:
-        case RequiredStrategy::SKLoop:
         case RequiredStrategy::PatternOverlayMethod:
-        case RequiredStrategy::ForcingChains:
-        case RequiredStrategy::DynamicForcingChains:
             return true;
         default:
             return false;
@@ -668,7 +661,6 @@ inline bool strategy_prefers_forcing_family_clue_ceiling(RequiredStrategy requir
 inline bool strategy_prefers_loop_overlay_clue_ceiling(RequiredStrategy required) {
     switch (required) {
         case RequiredStrategy::SKLoop:
-        case RequiredStrategy::PatternOverlayMethod:
             return true;
         default:
             return false;
@@ -726,24 +718,24 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     }
 
     if (required != RequiredStrategy::ALSXZ && strategy_prefers_relaxed_candidate_clue_window(required)) {
-        const int relaxed_min = static_cast<int>(0.37 * static_cast<double>(nn));
-        const int relaxed_max = static_cast<int>(0.52 * static_cast<double>(nn));
+        const int relaxed_min = static_cast<int>(0.45 * static_cast<double>(nn));
+        const int relaxed_max = static_cast<int>(0.60 * static_cast<double>(nn));
         min_clues = std::max(min_clues, relaxed_min);
         max_clues = std::max(max_clues, relaxed_max);
         max_clues = std::clamp(max_clues, min_clues, nn);
     }
 
     if (strategy_prefers_preserved_core_seed_window(required)) {
-        const int preserved_min = static_cast<int>(0.40 * static_cast<double>(nn));
-        const int preserved_max = static_cast<int>(0.60 * static_cast<double>(nn));
+        const int preserved_min = static_cast<int>(0.50 * static_cast<double>(nn));
+        const int preserved_max = static_cast<int>(0.65 * static_cast<double>(nn));
         min_clues = std::max(min_clues, preserved_min);
         max_clues = std::max(max_clues, preserved_max);
         max_clues = std::clamp(max_clues, min_clues, nn);
     }
 
     if (strategy_prefers_sparse_p6_bottleneck_window(required)) {
-        const int sparse_min = static_cast<int>(0.31 * static_cast<double>(nn));
-        const int sparse_max = static_cast<int>(0.46 * static_cast<double>(nn));
+        const int sparse_min = static_cast<int>(0.38 * static_cast<double>(nn));
+        const int sparse_max = static_cast<int>(0.52 * static_cast<double>(nn));
         min_clues = std::min(min_clues, sparse_min);
         max_clues = std::min(std::max(max_clues, sparse_min), sparse_max);
         min_clues = std::clamp(min_clues, std::max(4, n), nn);
@@ -751,20 +743,26 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     }
 
     if (strategy_prefers_relaxed_theoretical_clue_ceiling(required)) {
-        const int relaxed_max = static_cast<int>(0.50 * static_cast<double>(nn));
-        max_clues = std::max(max_clues, relaxed_max);
+        const int theory_min = static_cast<int>(0.70 * static_cast<double>(nn));
+        const int theory_max = static_cast<int>(0.82 * static_cast<double>(nn));
+        min_clues = std::max(min_clues, theory_min);
+        max_clues = std::max(max_clues, theory_max);
         max_clues = std::clamp(max_clues, min_clues, nn);
     }
 
     if (strategy_prefers_forcing_family_clue_ceiling(required)) {
-        const int forcing_max = static_cast<int>(0.62 * static_cast<double>(nn));
+        const int forcing_min = static_cast<int>(0.60 * static_cast<double>(nn));
+        const int forcing_max = static_cast<int>(0.72 * static_cast<double>(nn));
+        min_clues = std::max(min_clues, forcing_min);
         max_clues = std::max(max_clues, forcing_max);
         max_clues = std::clamp(max_clues, min_clues, nn);
     }
 
     if (strategy_prefers_loop_overlay_clue_ceiling(required)) {
-        const int loop_overlay_max = static_cast<int>(0.62 * static_cast<double>(nn));
-        max_clues = std::max(max_clues, loop_overlay_max);
+        const int loop_min = static_cast<int>(0.65 * static_cast<double>(nn));
+        const int loop_max = static_cast<int>(0.78 * static_cast<double>(nn));
+        min_clues = std::max(min_clues, loop_min);
+        max_clues = std::max(max_clues, loop_max);
         max_clues = std::clamp(max_clues, min_clues, nn);
     }
 

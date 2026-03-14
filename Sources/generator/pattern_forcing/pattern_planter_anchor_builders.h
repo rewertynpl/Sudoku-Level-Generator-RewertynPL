@@ -111,11 +111,35 @@ inline bool build_exocet_like_anchors(const GenericTopology& topo, PatternScratc
 
     const int r1 = topo.cell_row[static_cast<size_t>(b1)];
     const int r2 = topo.cell_row[static_cast<size_t>(b2)];
-    const int c1 = topo.cell_col[static_cast<size_t>(b1)];
-    const int c2 = topo.cell_col[static_cast<size_t>(b2)];
-    sc.add_anchor(r1 * n + c2);
-    sc.add_anchor(r2 * n + c1);
-    return sc.anchor_count >= 2;
+    const int base_box = topo.cell_box[static_cast<size_t>(b1)];
+    const int br = base_box / topo.box_cols_count;
+    const int base_bc = base_box % topo.box_cols_count;
+    int target_bc = base_bc;
+    for (int g = 0; g < 32; ++g) {
+        const int cand_bc = static_cast<int>(rng() % static_cast<uint64_t>(topo.box_cols_count));
+        if (cand_bc == base_bc) continue;
+        target_bc = cand_bc;
+        break;
+    }
+    if (target_bc == base_bc) return false;
+
+    const int c0_target = target_bc * topo.box_cols;
+    const int tc1 = c0_target;
+    const int tc2 = c0_target + 1;
+    if (tc2 >= n) return false;
+
+    const int target_box = br * topo.box_cols_count + target_bc;
+    const int t1 = r1 * n + tc1;
+    const int t2 = r2 * n + tc2;
+    if (t1 == t2) return false;
+    if (topo.cell_box[static_cast<size_t>(t1)] != target_box ||
+        topo.cell_box[static_cast<size_t>(t2)] != target_box) {
+        return false;
+    }
+
+    sc.add_anchor(t1);
+    sc.add_anchor(t2);
+    return sc.anchor_count >= 4;
 }
 
 inline bool build_loop_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
@@ -210,26 +234,49 @@ inline bool build_mutant_like_anchors(const GenericTopology& topo, PatternScratc
 }
 
 inline bool build_squirm_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.n < 6) return false;
+    if (topo.n < 5) return false;
     const int n = topo.n;
-    int rows[3] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1 };
-    rows[1] = rows[0];
-    rows[2] = rows[0];
-    for (int g = 0; g < 64 && rows[1] == rows[0]; ++g) rows[1] = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int g = 0; g < 96 && (rows[2] == rows[0] || rows[2] == rows[1]); ++g) rows[2] = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int cols[3] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1 };
-    cols[1] = cols[0];
-    cols[2] = cols[0];
-    for (int g = 0; g < 64 && cols[1] == cols[0]; ++g) cols[1] = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int g = 0; g < 96 && (cols[2] == cols[0] || cols[2] == cols[1]); ++g) cols[2] = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    if (rows[0] == rows[1] || rows[0] == rows[2] || rows[1] == rows[2] ||
-        cols[0] == cols[1] || cols[0] == cols[2] || cols[1] == cols[2]) return false;
-    for (int ri = 0; ri < 3; ++ri) {
-        for (int ci = 0; ci < 3; ++ci) {
+    int rows[5] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1, -1, -1 };
+    int cols[5] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1, -1, -1 };
+
+    for (int i = 1; i < 5; ++i) {
+        rows[i] = rows[0];
+        for (int g = 0; g < 160 && rows[i] == rows[0]; ++g) {
+            const int cand = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            bool unique = true;
+            for (int j = 0; j < i; ++j) {
+                if (rows[j] == cand) {
+                    unique = false;
+                    break;
+                }
+            }
+            if (unique) rows[i] = cand;
+        }
+        if (rows[i] == rows[0]) return false;
+    }
+
+    for (int i = 1; i < 5; ++i) {
+        cols[i] = cols[0];
+        for (int g = 0; g < 160 && cols[i] == cols[0]; ++g) {
+            const int cand = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            bool unique = true;
+            for (int j = 0; j < i; ++j) {
+                if (cols[j] == cand) {
+                    unique = false;
+                    break;
+                }
+            }
+            if (unique) cols[i] = cand;
+        }
+        if (cols[i] == cols[0]) return false;
+    }
+
+    for (int ri = 0; ri < 5; ++ri) {
+        for (int ci = 0; ci < 5; ++ci) {
             sc.add_anchor(rows[ri] * n + cols[ci]);
         }
     }
-    return sc.anchor_count >= 9;
+    return sc.anchor_count >= 25;
 }
 
 inline bool build_als_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {

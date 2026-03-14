@@ -1,8 +1,8 @@
 // ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // Module: continuous_nice_loop.h (Level 7 - Nightmare)
-// Description: Direct alternating strong/weak loop search with discontinuity
-// inference (strong-strong => true, weak-weak => false).
+// Description: Direct alternating strong/weak loop search for true continuous
+// nice loops. Discontinuous loop inferences are intentionally excluded.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
@@ -32,7 +32,7 @@ inline bool cnl_is_strong_neighbor(const shared::ExactPatternScratchpad& sp, int
 inline int cnl_collect_neighbors(
     const shared::ExactPatternScratchpad& sp,
     int u,
-    int edge_type, // 1=strong, 0=weak-only
+    int edge_type,
     int* out) {
     int cnt = 0;
     if (edge_type == 1) {
@@ -54,6 +54,22 @@ inline int cnl_collect_neighbors(
     return cnt;
 }
 
+inline ApplyResult cnl_prune_weak_edge(
+    CandidateState& st,
+    const shared::ExactPatternScratchpad& sp,
+    uint64_t bit,
+    int a_cell,
+    int b_cell) {
+    for (int i = 0; i < sp.dyn_digit_cell_count; ++i) {
+        const int idx = sp.dyn_digit_cells[i];
+        if (idx == a_cell || idx == b_cell) continue;
+        if (!st.is_peer(idx, a_cell) || !st.is_peer(idx, b_cell)) continue;
+        const ApplyResult er = st.eliminate(idx, bit);
+        if (er != ApplyResult::NoProgress) return er;
+    }
+    return ApplyResult::NoProgress;
+}
+
 inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = get_current_time_ns();
     ++s.use_count;
@@ -62,11 +78,16 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
     bool any_progress = false;
     auto& sp = shared::exact_pattern_scratchpad();
 
-    int* const vis_even = sp.visited;    // visited by (node, parity 0)
-    int* const vis_odd = sp.bfs_depth;   // visited by (node, parity 1)
-    int* const queue = sp.bfs_queue;     // state = node * 2 + last_edge_type
-    int* const depth = sp.bfs_parent;    // state depth in edges
     int neighbors[256]{};
+    int cycle_cells[64]{};
+    int cycle_edge_types[64]{};
+    int backtrack_idx[64]{};
+
+    int* const vis_even = sp.visited;
+    int* const vis_odd = sp.bfs_depth;
+    int* const queue_state = sp.bfs_queue;
+    int* const queue_parent = sp.chain_cell;
+    int* const queue_depth = sp.chain_parent;
 
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
@@ -80,7 +101,6 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
             if (st.board->values[start_cell] != 0) continue;
 
             for (int first_type = 0; first_type <= 1; ++first_type) {
-                // first_type: 1=strong, 0=weak-only
                 std::fill_n(vis_even, sp.dyn_node_count, 0);
                 std::fill_n(vis_odd, sp.dyn_node_count, 0);
 
@@ -89,20 +109,21 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
 
                 const int first_cnt = cnl_collect_neighbors(sp, start, first_type, neighbors);
                 for (int i = 0; i < first_cnt; ++i) {
-                    const int v = neighbors[i];
-                    const int state = (v << 1) | first_type; // last edge type used
                     if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
-                    queue[qt] = state;
-                    depth[qt] = 1;
-                    ++qt;
+                    const int v = neighbors[i];
+                    queue_state[qt] = (v << 1) | first_type;
+                    queue_parent[qt] = -1;
+                    queue_depth[qt] = 1;
                     if (first_type == 0) vis_even[v] = 1;
                     else vis_odd[v] = 1;
+                    ++qt;
                 }
 
                 bool inferred = false;
                 while (qh < qt && !inferred) {
-                    const int state = queue[qh];
-                    const int dep = depth[qh];
+                    const int state_idx = qh;
+                    const int state = queue_state[qh];
+                    const int dep = queue_depth[qh];
                     ++qh;
 
                     const int u = (state >> 1);
@@ -114,61 +135,47 @@ inline ApplyResult apply_continuous_nice_loop(CandidateState& st, StrategyStats&
                     for (int i = 0; i < next_cnt; ++i) {
                         const int v = neighbors[i];
                         if (v == start) {
-                            // Discontinuous loop at start:
-                            // same type at both ends of start => inference on start candidate.
-                            if (next_type == first_type && dep >= 2) {
-                                if (first_type == 1) {
-                                    if (!st.place(start_cell, d)) {
-                                        s.elapsed_ns += get_current_time_ns() - t0;
-                                        return ApplyResult::Contradiction;
-                                    }
-                                } else {
-                                    const ApplyResult er = st.eliminate(start_cell, bit);
+                            if (next_type != first_type && dep >= 3) {
+                                int bt_count = 0;
+                                for (int cur = state_idx; cur >= 0 && bt_count < 64; cur = queue_parent[cur]) {
+                                    backtrack_idx[bt_count++] = cur;
+                                }
+
+                                int node_count = 1;
+                                int edge_count = 0;
+                                cycle_cells[0] = start_cell;
+                                for (int k = bt_count - 1; k >= 0; --k) {
+                                    const int packed = queue_state[backtrack_idx[k]];
+                                    cycle_edge_types[edge_count++] = (packed & 1);
+                                    cycle_cells[node_count++] = sp.dyn_node_to_cell[packed >> 1];
+                                }
+                                cycle_edge_types[edge_count++] = next_type;
+
+                                for (int e = 0; e < edge_count && !inferred; ++e) {
+                                    if (cycle_edge_types[e] != 0) continue;
+                                    const int a_cell = cycle_cells[e];
+                                    const int b_cell = (e + 1 < node_count) ? cycle_cells[e + 1] : start_cell;
+                                    const ApplyResult er = cnl_prune_weak_edge(st, sp, bit, a_cell, b_cell);
                                     if (er == ApplyResult::Contradiction) {
                                         s.elapsed_ns += get_current_time_ns() - t0;
                                         return er;
                                     }
-                                    if (er == ApplyResult::NoProgress) {
-                                        // no inference from this loop
-                                        continue;
+                                    if (er == ApplyResult::Progress) {
+                                        any_progress = true;
+                                        inferred = true;
                                     }
                                 }
-                                any_progress = true;
-                                inferred = true;
-                                break;
                             }
                             continue;
                         }
 
                         int* vis = (next_type == 0) ? vis_even : vis_odd;
-                        int* vis_other = (next_type == 0) ? vis_odd : vis_even;
-                        if (vis_other[v] != 0 && dep >= 2) {
-                            const int infer_cell = sp.dyn_node_to_cell[v];
-                            ApplyResult er = ApplyResult::NoProgress;
-                            if (next_type == 1) {
-                                if (!st.place(infer_cell, d)) {
-                                    s.elapsed_ns += get_current_time_ns() - t0;
-                                    return ApplyResult::Contradiction;
-                                }
-                                er = ApplyResult::Progress;
-                            } else {
-                                er = st.eliminate(infer_cell, bit);
-                                if (er == ApplyResult::Contradiction) {
-                                    s.elapsed_ns += get_current_time_ns() - t0;
-                                    return er;
-                                }
-                            }
-                            if (er == ApplyResult::Progress) {
-                                any_progress = true;
-                                inferred = true;
-                                break;
-                            }
-                        }
                         if (vis[v] != 0) continue;
                         vis[v] = 1;
                         if (qt >= shared::ExactPatternScratchpad::MAX_BFS) break;
-                        queue[qt] = (v << 1) | next_type;
-                        depth[qt] = dep + 1;
+                        queue_state[qt] = (v << 1) | next_type;
+                        queue_parent[qt] = state_idx;
+                        queue_depth[qt] = dep + 1;
                         ++qt;
                     }
                 }
