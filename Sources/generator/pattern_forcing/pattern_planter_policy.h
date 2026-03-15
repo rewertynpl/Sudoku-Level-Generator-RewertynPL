@@ -29,7 +29,7 @@ inline bool pattern_policy_allows_family_fallback(PatternGeneratorPolicy policy)
 inline PatternStrategyPolicy pattern_strategy_policy(RequiredStrategy required, int level) {
     switch (required) {
     case RequiredStrategy::Exocet:
-        return {PatternKind::ExocetLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::ExocetLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::SeniorExocet:
         return {PatternKind::ExocetLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::MSLS:
@@ -37,45 +37,46 @@ inline PatternStrategyPolicy pattern_strategy_policy(RequiredStrategy required, 
     case RequiredStrategy::PatternOverlayMethod:
         return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::SKLoop:
-        return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::Medusa3D:
-        return {PatternKind::ColorLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::ColorLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::DeathBlossom:
-        return {PatternKind::PetalLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::PetalLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::SueDeCoq:
-        return {PatternKind::IntersectionLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::IntersectionLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::KrakenFish:
-        return {PatternKind::FishLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::FishLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::FrankenFish:
-        return {PatternKind::FrankenLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::FrankenLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::MutantFish:
-        return {PatternKind::MutantLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::MutantLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::Squirmbag:
-        return {PatternKind::SquirmLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::SquirmLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::ALSXYWing:
-    case RequiredStrategy::ALSXZ:
     case RequiredStrategy::ALSChain:
     case RequiredStrategy::ALSAIC:
+        return {PatternKind::AlsLike, PatternGeneratorPolicy::ExactRequired};
+    case RequiredStrategy::ALSXZ:
     case RequiredStrategy::WXYZWing:
         return {PatternKind::AlsLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
     case RequiredStrategy::AlignedPairExclusion:
     case RequiredStrategy::AlignedTripleExclusion:
-        return {PatternKind::ExclusionLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::ExclusionLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::AIC:
-        return {PatternKind::AicLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::AicLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::GroupedAIC:
-        return {PatternKind::GroupedAicLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::GroupedAicLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::GroupedXCycle:
-        return {PatternKind::GroupedCycleLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::GroupedCycleLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::ContinuousNiceLoop:
-        return {PatternKind::NiceLoopLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::NiceLoopLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::XChain:
         return {PatternKind::XChainLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
     case RequiredStrategy::XYChain:
         return {PatternKind::XYChainLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
     case RequiredStrategy::ForcingChains:
     case RequiredStrategy::DynamicForcingChains:
-        return {PatternKind::ForcingLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
+        return {PatternKind::ForcingLike, PatternGeneratorPolicy::ExactRequired};
     case RequiredStrategy::Swordfish:
         return {PatternKind::SwordfishLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
     case RequiredStrategy::XWing:

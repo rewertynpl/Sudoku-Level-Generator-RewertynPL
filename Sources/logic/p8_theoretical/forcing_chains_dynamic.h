@@ -19,6 +19,7 @@
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
 #include "../shared/link_graph_builder.h"
+#include "../shared/required_strategy_gate.h"
 #include "../shared/state_probe.h"
 
 // DoĹ‚Ä…czamy komponent wykorzystywany do silnej weryfikacji powiÄ…zaĹ„ w DFC
@@ -1209,6 +1210,10 @@ inline ApplyResult apply_forcing_chains(CandidateState& st, StrategyStats& s, Ge
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::Progress;
     }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::ForcingChains)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
+    }
 
     // Faza 2: GĹ‚Ä™bokie zejĹ›cia AIC na grafie implikacji.
     const int depth_cap = std::clamp(14 + (st.board->empty_cells / std::max(1, st.topo->n)), 16, 28);
@@ -1266,6 +1271,10 @@ inline ApplyResult apply_dynamic_forcing_chains(CandidateState& st, StrategyStat
         r.used_dynamic_forcing_chains = true;
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::Progress;
+    }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::DynamicForcingChains)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
     }
 
     StrategyStats tmp{};

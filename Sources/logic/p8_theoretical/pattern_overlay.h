@@ -18,6 +18,7 @@
 #include "../../config/bit_utils.h"
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
+#include "../shared/required_strategy_gate.h"
 #include "../shared/state_probe.h"
 #include "p8_density.h"
 
@@ -1672,78 +1673,82 @@ inline ApplyResult apply_pattern_overlay_method(CandidateState& st, StrategyStat
     }
 
     StrategyStats tmp{};
+    const bool exact_only_required =
+        ::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::PatternOverlayMethod);
     
     // Krok 1: Global digit overlay family.
-    const ApplyResult hexa_global_family_exact = apply_pom_global_digit_hexa_family_exact(st, tmp, r);
-    if (hexa_global_family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return hexa_global_family_exact;
-    }
-    if (hexa_global_family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
+    if (!exact_only_required) {
+        const ApplyResult hexa_global_family_exact = apply_pom_global_digit_hexa_family_exact(st, tmp, r);
+        if (hexa_global_family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return hexa_global_family_exact;
+        }
+        if (hexa_global_family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
 
-    const ApplyResult penta_global_family_exact = apply_pom_global_digit_penta_family_exact(st, tmp, r);
-    if (penta_global_family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return penta_global_family_exact;
-    }
-    if (penta_global_family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
+        const ApplyResult penta_global_family_exact = apply_pom_global_digit_penta_family_exact(st, tmp, r);
+        if (penta_global_family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return penta_global_family_exact;
+        }
+        if (penta_global_family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
 
-    const ApplyResult quad_global_family_exact = apply_pom_global_digit_quad_family_exact(st, tmp, r);
-    if (quad_global_family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return quad_global_family_exact;
-    }
-    if (quad_global_family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
+        const ApplyResult quad_global_family_exact = apply_pom_global_digit_quad_family_exact(st, tmp, r);
+        if (quad_global_family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return quad_global_family_exact;
+        }
+        if (quad_global_family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
 
-    const ApplyResult global_family_exact = apply_pom_global_digit_family_exact(st, tmp, r);
-    if (global_family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return global_family_exact;
-    }
-    if (global_family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
+        const ApplyResult global_family_exact = apply_pom_global_digit_family_exact(st, tmp, r);
+        if (global_family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return global_family_exact;
+        }
+        if (global_family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
 
-    const ApplyResult pair_family_exact = apply_pom_digit_pair_family_exact(st, tmp, r);
-    if (pair_family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return pair_family_exact;
-    }
-    if (pair_family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
+        const ApplyResult pair_family_exact = apply_pom_digit_pair_family_exact(st, tmp, r);
+        if (pair_family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return pair_family_exact;
+        }
+        if (pair_family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
 
-    const ApplyResult family_exact = apply_pom_digit_family_exact(st, tmp, r);
-    if (family_exact == ApplyResult::Contradiction) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return family_exact;
-    }
-    if (family_exact == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_pattern_overlay_method = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
+        const ApplyResult family_exact = apply_pom_digit_family_exact(st, tmp, r);
+        if (family_exact == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return family_exact;
+        }
+        if (family_exact == ApplyResult::Progress) {
+            ++s.hit_count;
+            r.used_pattern_overlay_method = true;
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return ApplyResult::Progress;
+        }
     }
 
     // Krok 2: Aplikacja czystego POM (szybki overlay)
@@ -1757,6 +1762,10 @@ inline ApplyResult apply_pattern_overlay_method(CandidateState& st, StrategyStat
         r.used_pattern_overlay_method = true;
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::Progress;
+    }
+    if (exact_only_required) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
     }
     
     // Krok 3: Adaptacyjne dynamiczne Ĺ›ledzenie zatorĂłw za pomocÄ… Ĺ‚aĹ„cuchĂłw (GĹ‚Ä™bokoĹ›Ä‡ P8)

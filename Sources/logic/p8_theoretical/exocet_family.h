@@ -16,6 +16,7 @@
 #include "../../config/bit_utils.h"
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
+#include "../shared/required_strategy_gate.h"
 #include "../shared/state_probe.h"
 #include "../p7_nightmare/aic_grouped_aic.h"
 #include "p8_density.h"
@@ -1165,6 +1166,10 @@ inline ApplyResult apply_exocet(CandidateState& st, StrategyStats& s, GenericLog
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar;
     }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::Exocet)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
+    }
 
     bool used = false;
     const int depth_cap = std::clamp(8 + st.board->empty_cells / std::max(1, n), 10, 16);
@@ -1217,6 +1222,10 @@ inline ApplyResult apply_senior_exocet(CandidateState& st, StrategyStats& s, Gen
         r.used_senior_exocet = true;
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar;
+    }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::SeniorExocet)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
     }
 
     bool used = false;

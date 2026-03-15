@@ -171,12 +171,16 @@ inline void write_result_summary(std::ostream& out, const GenerateRunResult& res
     out << "Attempts: " << result.attempts << "\n";
     if (cfg.required_strategy != RequiredStrategy::None) {
         out << "Required strategy: " << to_string(cfg.required_strategy) << "\n";
+        out << "Required slot entered (certifier): "
+            << result.certifier_required_slot_entered << "\n";
         out << "Required strategy use (certifier): "
             << result.certifier_required_strategy_use << "\n";
         out << "Required strategy hit (certifier): "
             << result.certifier_required_strategy_hit << "\n";
         out << "Required strategy analyzed (certifier): "
             << result.certifier_required_strategy_analyzed << "\n";
+        out << "Required strategy certified exact: "
+            << result.required_strategy_certified_exact << "\n";
         out << "Required strategy use/hit (certifier): "
             << result.certifier_required_strategy_use << "/"
             << result.certifier_required_strategy_hit << "\n";
@@ -193,6 +197,7 @@ inline void write_result_summary(std::ostream& out, const GenerateRunResult& res
     out << "  - Logic: " << result.reject_logic << "\n";
     out << "  - Uniqueness: " << result.reject_uniqueness << "\n";
     out << "  - StrategyStageRejects: " << result.reject_strategy << "\n";
+    out << "  - ExactNoProgress: " << result.reject_exact_no_progress << "\n";
     out << "  - Replay: " << result.reject_replay << "\n";
     out << "  - DistributionBias: " << result.reject_distribution_bias << "\n";
     out << "  - UniquenessBudget: " << result.reject_uniqueness_budget << "\n";
@@ -210,13 +215,15 @@ inline void write_result_summary(std::ostream& out, const GenerateRunResult& res
     out << "Hidden hit/use: " << result.strategy_hidden_hit << "/" << result.strategy_hidden_use << "\n";
     out << "MCTS advanced evals: " << result.mcts_advanced_evals << "\n";
     if (cfg.required_strategy != RequiredStrategy::None) {
-        out << "Certifier required analyzed/use/hit: "
+        out << "Certifier required analyzed/slot/use/hit: "
             << result.certifier_required_strategy_analyzed << "/"
+            << result.certifier_required_slot_entered << "/"
             << result.certifier_required_strategy_use << "/"
             << result.certifier_required_strategy_hit << "\n";
     }
     out << "Pattern exact template used: " << result.pattern_exact_template_used << "\n";
     out << "Pattern family fallback used: " << result.pattern_family_fallback_used << "\n";
+    out << "Required strategy certified exact: " << result.required_strategy_certified_exact << "\n";
     out << "Required exact contract met: " << result.required_strategy_exact_contract_met << "\n";
     out << "Strategy audit canonical full: " << audit_summary.canonical_full << "/" << audit_summary.total_slots << "\n";
     out << "Strategy audit tighten/rewrite/missing: "
@@ -309,9 +316,11 @@ inline void maybe_write_direct_cli_report(
     report << "ExitCode: 0\n";
     report << "AppVerifier: n/a (direct-cli)\n";
     report << "Command: " << command_line << "\n";
+    report << "Required slot entered (certifier): " << result.certifier_required_slot_entered << "\n";
     report << "Required strategy use (certifier): " << result.certifier_required_strategy_use << "\n";
     report << "Required strategy hit (certifier): " << result.certifier_required_strategy_hit << "\n";
     report << "Required strategy analyzed (certifier): " << result.certifier_required_strategy_analyzed << "\n";
+    report << "Required strategy certified exact: " << result.required_strategy_certified_exact << "\n";
     report << "Required strategy use/hit (certifier): "
            << result.certifier_required_strategy_use << "/" << result.certifier_required_strategy_hit << "\n";
     report << "MCTS required use/hit: "
@@ -331,12 +340,15 @@ inline void maybe_write_direct_cli_report(
     report << "seed-unsolved = 0\n";
     report << "seed-miss = 0\n";
     report << "Strategy-stage rejects: " << result.reject_strategy << "\n";
-    report << "Certifier required analyzed/use/hit: "
+    report << "Exact no progress: " << result.reject_exact_no_progress << "\n";
+    report << "Certifier required analyzed/slot/use/hit: "
            << result.certifier_required_strategy_analyzed << "/"
+           << result.certifier_required_slot_entered << "/"
            << result.certifier_required_strategy_use << "/"
            << result.certifier_required_strategy_hit << "\n";
     report << "Pattern exact template used: " << result.pattern_exact_template_used << "\n";
     report << "Pattern family fallback used: " << result.pattern_family_fallback_used << "\n";
+    report << "Required strategy certified exact: " << result.required_strategy_certified_exact << "\n";
     report << "Required exact contract met: " << result.required_strategy_exact_contract_met << "\n";
     report << "Accepted/sec: " << result.accepted_per_sec << "\n";
     report << "Min required use/hit: " << min_use << "/" << min_hit << "\n";

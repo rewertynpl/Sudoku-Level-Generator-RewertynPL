@@ -30,6 +30,7 @@ inline void accumulate_reject_reason(GenerateRunResult& r, RejectReason reason, 
         case RejectReason::Logic: ++r.reject_logic; break;
         case RejectReason::Uniqueness: ++r.reject_uniqueness; break;
         case RejectReason::Strategy: ++r.reject_strategy; break;
+        case RejectReason::ExactNoProgress: ++r.reject_exact_no_progress; break;
         case RejectReason::Replay: ++r.reject_replay; break;
         case RejectReason::DistributionBias: ++r.reject_distribution_bias; break;
         case RejectReason::UniquenessBudget: ++r.reject_uniqueness_budget; break;
@@ -45,6 +46,7 @@ inline void accumulate_reject_reason_atomic(
     std::atomic<uint64_t>& reject_logic,
     std::atomic<uint64_t>& reject_uniqueness,
     std::atomic<uint64_t>& reject_strategy,
+    std::atomic<uint64_t>& reject_exact_no_progress,
     std::atomic<uint64_t>& reject_replay,
     std::atomic<uint64_t>& reject_distribution_bias,
     std::atomic<uint64_t>& reject_uniqueness_budget) {
@@ -57,6 +59,7 @@ inline void accumulate_reject_reason_atomic(
         case RejectReason::Logic: reject_logic.fetch_add(1, std::memory_order_relaxed); break;
         case RejectReason::Uniqueness: reject_uniqueness.fetch_add(1, std::memory_order_relaxed); break;
         case RejectReason::Strategy: reject_strategy.fetch_add(1, std::memory_order_relaxed); break;
+        case RejectReason::ExactNoProgress: reject_exact_no_progress.fetch_add(1, std::memory_order_relaxed); break;
         case RejectReason::Replay: reject_replay.fetch_add(1, std::memory_order_relaxed); break;
         case RejectReason::DistributionBias: reject_distribution_bias.fetch_add(1, std::memory_order_relaxed); break;
         case RejectReason::UniquenessBudget: reject_uniqueness_budget.fetch_add(1, std::memory_order_relaxed); break;
@@ -71,6 +74,7 @@ inline const char* reject_reason_label(RejectReason reason) {
         case RejectReason::Logic: return "logic";
         case RejectReason::Uniqueness: return "uniqueness";
         case RejectReason::Strategy: return "strategy";
+        case RejectReason::ExactNoProgress: return "exact_no_progress";
         case RejectReason::Replay: return "replay";
         case RejectReason::DistributionBias: return "distribution_bias";
         case RejectReason::UniquenessBudget: return "uniqueness_budget";
@@ -122,6 +126,7 @@ inline bool should_trace_attempt_diag(
     if (timed_out) return true;
     return reason == RejectReason::Logic ||
            reason == RejectReason::Strategy ||
+           reason == RejectReason::ExactNoProgress ||
            reason == RejectReason::Replay ||
            reason == RejectReason::DistributionBias;
 }
@@ -348,6 +353,7 @@ inline GenerateRunResult run_generic_sudoku(
     std::atomic<uint64_t> reject_logic{0};
     std::atomic<uint64_t> reject_uniqueness{0};
     std::atomic<uint64_t> reject_strategy{0};
+    std::atomic<uint64_t> reject_exact_no_progress{0};
     std::atomic<uint64_t> reject_replay{0};
     std::atomic<uint64_t> reject_distribution_bias{0};
     std::atomic<uint64_t> reject_uniqueness_budget{0};
@@ -362,8 +368,10 @@ inline GenerateRunResult run_generic_sudoku(
     std::atomic<uint64_t> strategy_hidden_hit{0};
     std::atomic<uint64_t> mcts_advanced_evals{0};
     std::atomic<uint64_t> certifier_required_strategy_analyzed{0};
+    std::atomic<uint64_t> certifier_required_slot_entered{0};
     std::atomic<uint64_t> certifier_required_strategy_use{0};
     std::atomic<uint64_t> certifier_required_strategy_hit{0};
+    std::atomic<uint64_t> required_strategy_certified_exact{0};
     std::atomic<uint64_t> mcts_required_strategy_analyzed{0};
     std::atomic<uint64_t> mcts_required_strategy_use{0};
     std::atomic<uint64_t> mcts_required_strategy_hit{0};
@@ -524,8 +532,10 @@ inline GenerateRunResult run_generic_sudoku(
                 strategy_hidden_hit.fetch_add(perf.strategy_hidden_hit, std::memory_order_relaxed);
                 mcts_advanced_evals.fetch_add(perf.mcts_advanced_evals, std::memory_order_relaxed);
                 certifier_required_strategy_analyzed.fetch_add(perf.certifier_required_strategy_analyzed, std::memory_order_relaxed);
+                certifier_required_slot_entered.fetch_add(perf.certifier_required_slot_entered, std::memory_order_relaxed);
                 certifier_required_strategy_use.fetch_add(perf.certifier_required_strategy_use, std::memory_order_relaxed);
                 certifier_required_strategy_hit.fetch_add(perf.certifier_required_strategy_hit, std::memory_order_relaxed);
+                required_strategy_certified_exact.fetch_add(perf.required_strategy_certified_exact, std::memory_order_relaxed);
                 mcts_required_strategy_analyzed.fetch_add(perf.mcts_required_strategy_analyzed, std::memory_order_relaxed);
                 mcts_required_strategy_use.fetch_add(perf.mcts_required_strategy_use, std::memory_order_relaxed);
                 mcts_required_strategy_hit.fetch_add(perf.mcts_required_strategy_hit, std::memory_order_relaxed);
@@ -662,6 +672,7 @@ inline GenerateRunResult run_generic_sudoku(
                         reject_logic,
                         reject_uniqueness,
                         reject_strategy,
+                        reject_exact_no_progress,
                         reject_replay,
                         reject_distribution_bias,
                         reject_uniqueness_budget);
@@ -675,7 +686,10 @@ inline GenerateRunResult run_generic_sudoku(
                             " reason=" + std::string(reject_reason_label(reason)) +
                             " timed_out=" + std::string(timed_out ? "1" : "0") +
                             " matched_required=" + std::string(strategy_info.matched_required_strategy ? "1" : "0") +
+                            " slot_entered=" + std::string(strategy_info.required_slot_entered ? "1" : "0") +
+                            " certified_exact=" + std::string(strategy_info.required_strategy_certified_exact ? "1" : "0") +
                             " exact_contract=" + std::string(strategy_info.required_strategy_exact_contract_met ? "1" : "0") +
+                            " exact_no_progress=" + std::string(strategy_info.exact_no_progress ? "1" : "0") +
                             " family_fallback=" + std::string(strategy_info.family_fallback_used ? "1" : "0") +
                             " req_confirm_use=" + std::string(strategy_info.required_strategy_use_confirmed ? "1" : "0") +
                             " req_confirm_hit=" + std::string(strategy_info.required_strategy_hit_confirmed ? "1" : "0") +
@@ -799,6 +813,7 @@ inline GenerateRunResult run_generic_sudoku(
     result.reject_logic = reject_logic.load(std::memory_order_relaxed);
     result.reject_uniqueness = reject_uniqueness.load(std::memory_order_relaxed);
     result.reject_strategy = reject_strategy.load(std::memory_order_relaxed);
+    result.reject_exact_no_progress = reject_exact_no_progress.load(std::memory_order_relaxed);
     result.reject_replay = reject_replay.load(std::memory_order_relaxed);
     result.reject_distribution_bias = reject_distribution_bias.load(std::memory_order_relaxed);
     result.reject_uniqueness_budget = reject_uniqueness_budget.load(std::memory_order_relaxed);
@@ -819,8 +834,10 @@ inline GenerateRunResult run_generic_sudoku(
     result.strategy_hidden_hit = strategy_hidden_hit.load(std::memory_order_relaxed);
     result.mcts_advanced_evals = mcts_advanced_evals.load(std::memory_order_relaxed);
     result.certifier_required_strategy_analyzed = certifier_required_strategy_analyzed.load(std::memory_order_relaxed);
+    result.certifier_required_slot_entered = certifier_required_slot_entered.load(std::memory_order_relaxed);
     result.certifier_required_strategy_use = certifier_required_strategy_use.load(std::memory_order_relaxed);
     result.certifier_required_strategy_hit = certifier_required_strategy_hit.load(std::memory_order_relaxed);
+    result.required_strategy_certified_exact = required_strategy_certified_exact.load(std::memory_order_relaxed);
     result.mcts_required_strategy_analyzed = mcts_required_strategy_analyzed.load(std::memory_order_relaxed);
     result.mcts_required_strategy_use = mcts_required_strategy_use.load(std::memory_order_relaxed);
     result.mcts_required_strategy_hit = mcts_required_strategy_hit.load(std::memory_order_relaxed);
@@ -879,14 +896,17 @@ inline GenerateRunResult run_generic_sudoku(
         " written=" + std::to_string(result.written) +
         " attempts=" + std::to_string(result.attempts) +
         " cert_required_analyzed=" + std::to_string(result.certifier_required_strategy_analyzed) +
+        " cert_required_slot_entered=" + std::to_string(result.certifier_required_slot_entered) +
         " cert_required_use=" + std::to_string(result.certifier_required_strategy_use) +
         " cert_required_hit=" + std::to_string(result.certifier_required_strategy_hit) +
+        " required_certified_exact=" + std::to_string(result.required_strategy_certified_exact) +
         " mcts_required_analyzed=" + std::to_string(result.mcts_required_strategy_analyzed) +
         " mcts_required_use=" + std::to_string(result.mcts_required_strategy_use) +
         " mcts_required_hit=" + std::to_string(result.mcts_required_strategy_hit) +
         " exact_template_used=" + std::to_string(result.pattern_exact_template_used) +
         " family_fallback_used=" + std::to_string(result.pattern_family_fallback_used) +
         " exact_contract_met=" + std::to_string(result.required_strategy_exact_contract_met) +
+        " reject_exact_no_progress=" + std::to_string(result.reject_exact_no_progress) +
         " required_zero_use_streak_max=" + std::to_string(required_zero_use_streak_max.load(std::memory_order_relaxed)) +
         " best_template_score=" + std::to_string(best_template_score.load(std::memory_order_relaxed)));
 

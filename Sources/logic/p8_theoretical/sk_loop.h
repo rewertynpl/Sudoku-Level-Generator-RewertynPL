@@ -19,6 +19,7 @@
 #include "../../config/bit_utils.h"
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
+#include "../shared/required_strategy_gate.h"
 #include "../shared/state_probe.h"
 #include "p8_density.h"
 
@@ -319,6 +320,10 @@ inline ApplyResult apply_sk_loop(CandidateState& st, StrategyStats& s, GenericLo
         r.used_sk_loop = true;
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::Progress;
+    }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::SKLoop)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
     }
 
     // Adaptacyjne gĹ‚Ä™bokie skanowanie (P8) - Skokowa propagacja dla siatek

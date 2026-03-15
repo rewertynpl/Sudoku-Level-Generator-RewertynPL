@@ -152,6 +152,9 @@ When the solver encounters the ALS-XZ pattern injected by the generator, the XY-
 How to fix it?
 For the algorithms to work correctly, we must always run "Named Structures" (Specific Templates) before "General Graph Chains" (Generic Templates). We must swap the order in sudoku_logic_engine.h for Levels 6 and 7.
 
+D) (The Clue Ceiling Paradox).
+
+
 📂 Proposed Project Structure (Directory Tree)
 1. Base Directory and Tools (Core)
 

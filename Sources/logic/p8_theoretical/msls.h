@@ -16,6 +16,7 @@
 #include "../../config/bit_utils.h"
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
+#include "../shared/required_strategy_gate.h"
 #include "../shared/state_probe.h"
 #include "p8_density.h"
 
@@ -799,6 +800,10 @@ inline ApplyResult apply_msls(CandidateState& st, StrategyStats& s, GenericLogic
         r.used_msls = true;
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar;
+    }
+    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::MSLS)) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::NoProgress;
     }
 
     const int depth_cap = std::clamp(8 + (st.board->empty_cells / std::max(1, n)), 10, 16);

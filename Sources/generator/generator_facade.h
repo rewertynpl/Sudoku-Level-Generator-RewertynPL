@@ -28,6 +28,7 @@
 
 // Logic & Strategies (Fasada silnika certyfikacji)
 #include "../logic/sudoku_logic_engine.h"
+#include "../logic/shared/required_strategy_gate.h"
 
 // Post-Processing
 #include "post_processing/quality_metrics.h"
@@ -108,8 +109,10 @@ struct AttemptPerfStats {
     uint64_t strategy_hidden_use = 0;
     uint64_t strategy_hidden_hit = 0;
     uint64_t certifier_required_strategy_analyzed = 0;
+    uint64_t certifier_required_slot_entered = 0;
     uint64_t certifier_required_strategy_use = 0;
     uint64_t certifier_required_strategy_hit = 0;
+    uint64_t required_strategy_certified_exact = 0;
     uint64_t mcts_advanced_evals = 0;
     uint64_t mcts_required_strategy_analyzed = 0;
     uint64_t mcts_required_strategy_use = 0;
@@ -191,45 +194,60 @@ inline bool evaluate_required_strategy_contract_generic(
     const logic::GenericLogicCertifyResult& logic_result,
     const GenerateRunConfig& cfg,
     RequiredStrategy required,
+    bool family_fallback_used,
     RequiredStrategyAttemptInfo& strategy_info) {
 
     strategy_info = {};
+    strategy_info.family_fallback_used = family_fallback_used;
     if (required == RequiredStrategy::None) {
         return true;
+    }
+
+    const bool exact_only_required = strategy_requires_exact_only(required);
+    if (exact_only_required && family_fallback_used) {
+        return false;
     }
 
     size_t required_slot = 0;
     if (!mcts_digger::mcts_required_strategy_slot(required, required_slot)) {
         if (required == RequiredStrategy::Backtracking) {
             strategy_info.analyzed_required_strategy = true;
+            strategy_info.required_slot_entered = true;
             strategy_info.required_strategy_use_confirmed = true;
             strategy_info.required_strategy_hit_confirmed = true;
             strategy_info.matched_required_strategy = true;
+            strategy_info.required_strategy_certified_exact = true;
+            strategy_info.required_strategy_exact_contract_met = true;
             return true;
         }
         return false;
     }
 
     if (cfg.strict_canonical_strategies && !logic::GenericLogicCertify::is_full_canonical_slot(required_slot)) {
-        strategy_info.analyzed_required_strategy = true;
-        strategy_info.required_strategy_use_confirmed = true;
-        strategy_info.required_strategy_hit_confirmed = false;
-        strategy_info.matched_required_strategy = false;
         return false;
     }
     if (!cfg.allow_proxy_advanced && logic::GenericLogicCertify::is_proxy_slot(required_slot)) {
-        strategy_info.analyzed_required_strategy = true;
-        strategy_info.required_strategy_use_confirmed = true;
-        strategy_info.required_strategy_hit_confirmed = false;
-        strategy_info.matched_required_strategy = false;
         return false;
     }
 
-    strategy_info.required_strategy_use_confirmed = logic_result.strategy_stats[required_slot].use_count > 0;
-    strategy_info.required_strategy_hit_confirmed = logic_result.strategy_stats[required_slot].hit_count > 0;
-    strategy_info.analyzed_required_strategy = strategy_info.required_strategy_use_confirmed;
-    strategy_info.matched_required_strategy =
-        strategy_info.required_strategy_use_confirmed && strategy_info.required_strategy_hit_confirmed;
+    const bool slot_entered = logic_result.strategy_stats[required_slot].use_count > 0;
+    const bool hit_confirmed = logic_result.strategy_stats[required_slot].hit_count > 0;
+    strategy_info.required_slot_entered = slot_entered;
+    strategy_info.analyzed_required_strategy = slot_entered;
+    strategy_info.required_strategy_use_confirmed = slot_entered;
+    strategy_info.required_strategy_hit_confirmed = hit_confirmed;
+    strategy_info.exact_no_progress = exact_only_required && slot_entered && !hit_confirmed;
+
+    if (exact_only_required) {
+        strategy_info.matched_required_strategy = slot_entered;
+        strategy_info.required_strategy_certified_exact = slot_entered && hit_confirmed;
+        strategy_info.required_strategy_exact_contract_met = strategy_info.required_strategy_certified_exact;
+        return slot_entered;
+    }
+
+    strategy_info.matched_required_strategy = slot_entered && hit_confirmed;
+    strategy_info.required_strategy_certified_exact = strategy_info.matched_required_strategy;
+    strategy_info.required_strategy_exact_contract_met = strategy_info.required_strategy_certified_exact;
     return strategy_info.matched_required_strategy;
 }
 
@@ -611,7 +629,7 @@ inline bool generate_one_generic(
         perf_out->pattern_best_template_score = dig_best_template_score;
         perf_out->pattern_exact_template = dig_exact_template;
         perf_out->pattern_family_fallback_used = dig_family_fallback_used;
-        perf_out->required_strategy_exact_contract_met = dig_exact_contract_met;
+        perf_out->required_strategy_exact_contract_met = false;
         perf_out->pattern_template_score_delta = dig_template_score_delta;
         perf_out->pattern_mutation_strength = dig_mutation_strength;
         perf_out->pattern_planner_zero_use_streak = dig_planner_zero_use_streak;
@@ -623,7 +641,7 @@ inline bool generate_one_generic(
     }
 
     strategy_info.family_fallback_used = dig_family_fallback_used;
-    strategy_info.required_strategy_exact_contract_met = dig_exact_contract_met;
+    strategy_info.required_strategy_exact_contract_met = false;
 
     auto note_pattern_feedback = [&]() {
         pattern_forcing::note_template_attempt_feedback(
@@ -696,6 +714,7 @@ inline bool generate_one_generic(
     
     // Wywołanie głównego silnika z ewaluacją wszystkich wymaganych strategii
     log_stage_begin("logic");
+    const logic::shared::RequiredExactStrategyScope required_exact_scope(cfg.required_strategy);
     const logic::GenericLogicCertifyResult logic_result = logic.certify(candidate.puzzle, topo, budget_ptr, capture_logic_solution);
     log_stage_end(
         "logic",
@@ -738,22 +757,41 @@ inline bool generate_one_generic(
             return false;
         }
     }
-    const bool contract_ok = evaluate_required_strategy_contract_generic(logic_result, cfg, cfg.required_strategy, strategy_info);
+    const bool contract_ok = evaluate_required_strategy_contract_generic(
+        logic_result,
+        cfg,
+        cfg.required_strategy,
+        dig_family_fallback_used,
+        strategy_info);
     if (collect_perf) {
         size_t required_slot = 0;
         const bool has_required_slot =
             logic::GenericLogicCertify::slot_from_required_strategy(cfg.required_strategy, required_slot);
-        perf_out->certifier_required_strategy_analyzed = has_required_slot ? 1ULL : 0ULL;
+        perf_out->certifier_required_strategy_analyzed = strategy_info.analyzed_required_strategy ? 1ULL : 0ULL;
+        perf_out->certifier_required_slot_entered = strategy_info.required_slot_entered ? 1ULL : 0ULL;
         perf_out->certifier_required_strategy_use =
             has_required_slot ? logic_result.strategy_stats[required_slot].use_count : 0ULL;
         perf_out->certifier_required_strategy_hit =
             has_required_slot ? logic_result.strategy_stats[required_slot].hit_count : 0ULL;
+        perf_out->required_strategy_certified_exact =
+            strategy_info.required_strategy_certified_exact ? 1ULL : 0ULL;
+        perf_out->required_strategy_exact_contract_met =
+            strategy_info.required_strategy_exact_contract_met;
     }
     if (cfg.required_strategy != RequiredStrategy::None && !contract_ok) {
         log_pattern_contract("strategy-reject", "clues=" + std::to_string(candidate.clues));
         log_strategy_contract("strategy-reject", RejectReason::Strategy, &logic_result);
         note_pattern_feedback();
         reason = RejectReason::Strategy;
+        return false;
+    }
+    if (cfg.required_strategy != RequiredStrategy::None &&
+        strategy_requires_exact_only(cfg.required_strategy) &&
+        !strategy_info.required_strategy_certified_exact) {
+        log_pattern_contract("exact-no-progress", "clues=" + std::to_string(candidate.clues));
+        log_strategy_contract("exact-no-progress", RejectReason::ExactNoProgress, &logic_result);
+        note_pattern_feedback();
+        reason = RejectReason::ExactNoProgress;
         return false;
     }
     if (cfg.strict_logical && !logic_result.solved && cfg.required_strategy != RequiredStrategy::Backtracking) {

@@ -84,6 +84,7 @@ enum class RejectReason : uint8_t {
     Logic,
     Uniqueness,
     Strategy,
+    ExactNoProgress,
     Replay,
     DistributionBias,
     UniquenessBudget,
@@ -120,10 +121,13 @@ enum class StrategyAuditDecision : uint8_t {
 
 struct RequiredStrategyAttemptInfo {
     bool analyzed_required_strategy = false;
+    bool required_slot_entered = false;
     bool required_strategy_use_confirmed = false;
     bool required_strategy_hit_confirmed = false;
     bool matched_required_strategy = false;
+    bool required_strategy_certified_exact = false;
     bool required_strategy_exact_contract_met = false;
+    bool exact_no_progress = false;
     bool family_fallback_used = false;
 };
 
@@ -208,6 +212,7 @@ struct GenerateRunResult {
     uint64_t reject_logic = 0;
     uint64_t reject_uniqueness = 0;
     uint64_t reject_strategy = 0;
+    uint64_t reject_exact_no_progress = 0;
     uint64_t reject_replay = 0;
     uint64_t reject_distribution_bias = 0;
     uint64_t reject_uniqueness_budget = 0;
@@ -230,8 +235,10 @@ struct GenerateRunResult {
     uint64_t strategy_hidden_hit = 0;
     uint64_t mcts_advanced_evals = 0;
     uint64_t certifier_required_strategy_analyzed = 0;
+    uint64_t certifier_required_slot_entered = 0;
     uint64_t certifier_required_strategy_use = 0;
     uint64_t certifier_required_strategy_hit = 0;
+    uint64_t required_strategy_certified_exact = 0;
     uint64_t mcts_required_strategy_analyzed = 0;
     uint64_t mcts_required_strategy_use = 0;
     uint64_t mcts_required_strategy_hit = 0;
@@ -569,6 +576,37 @@ inline int strategy_min_level(RequiredStrategy rs) {
     return 9;
 }
 
+inline bool strategy_requires_exact_only(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::Medusa3D:
+        case RequiredStrategy::AIC:
+        case RequiredStrategy::GroupedAIC:
+        case RequiredStrategy::GroupedXCycle:
+        case RequiredStrategy::ContinuousNiceLoop:
+        case RequiredStrategy::ALSXYWing:
+        case RequiredStrategy::ALSChain:
+        case RequiredStrategy::SueDeCoq:
+        case RequiredStrategy::DeathBlossom:
+        case RequiredStrategy::FrankenFish:
+        case RequiredStrategy::MutantFish:
+        case RequiredStrategy::KrakenFish:
+        case RequiredStrategy::Squirmbag:
+        case RequiredStrategy::AlignedPairExclusion:
+        case RequiredStrategy::AlignedTripleExclusion:
+        case RequiredStrategy::ALSAIC:
+        case RequiredStrategy::MSLS:
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
+        case RequiredStrategy::ForcingChains:
+        case RequiredStrategy::DynamicForcingChains:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline bool required_strategy_selectable_for_geometry(RequiredStrategy rs, int box_rows, int box_cols) {
     if (!is_geometry_size_supported(box_rows, box_cols)) {
         return false;
@@ -861,10 +899,16 @@ inline bool strategy_smoke_relaxed_hit_allowed(RequiredStrategy rs) {
 }
 
 inline uint64_t strategy_smoke_min_required_hit(RequiredStrategy rs) {
+    if (strategy_requires_exact_only(rs)) {
+        return 0ULL;
+    }
     return strategy_smoke_relaxed_hit_allowed(rs) ? 0ULL : 1ULL;
 }
 
 inline uint64_t strategy_smoke_min_required_use(RequiredStrategy rs) {
+    if (strategy_requires_exact_only(rs)) {
+        return 1ULL;
+    }
     switch (rs) {
         case RequiredStrategy::RemotePairs:
         case RequiredStrategy::ALSXZ:
@@ -876,6 +920,9 @@ inline uint64_t strategy_smoke_min_required_use(RequiredStrategy rs) {
 }
 
 inline bool strategy_smoke_exact_contract_required(RequiredStrategy rs) {
+    if (strategy_requires_exact_only(rs)) {
+        return true;
+    }
     return !(strategy_smoke_min_required_use(rs) == 0ULL &&
              strategy_smoke_min_required_hit(rs) == 0ULL);
 }
