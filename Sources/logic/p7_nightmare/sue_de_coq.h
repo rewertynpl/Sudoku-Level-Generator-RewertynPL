@@ -3,6 +3,7 @@
 // Module: sue_de_coq.h (Level 7 - Nightmare)
 // Description: Full Sue de Coq implementation for row-box and col-box
 // intersections. Zero-allocation, fixed-size local buffers only.
+// Updated for N=64 and asymmetric geometries with 5-cell combo support.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
@@ -18,18 +19,19 @@
 
 namespace sudoku_hpc::logic::p7_nightmare {
 
+// Zaktualizowany silnik kombinatoryczny obsługujący do 5 elementów
 template <class Fn>
-inline void for_each_combo_up_to4(int count, int choose, const Fn& fn) {
+inline void for_each_combo_up_to5(int count, int choose, const Fn& fn) {
     if (choose == 1) {
         for (int a = 0; a < count; ++a) {
-            fn(a, -1, -1, -1);
+            fn(a, -1, -1, -1, -1);
         }
         return;
     }
     if (choose == 2) {
         for (int a = 0; a < count; ++a) {
             for (int b = a + 1; b < count; ++b) {
-                fn(a, b, -1, -1);
+                fn(a, b, -1, -1, -1);
             }
         }
         return;
@@ -38,7 +40,7 @@ inline void for_each_combo_up_to4(int count, int choose, const Fn& fn) {
         for (int a = 0; a < count; ++a) {
             for (int b = a + 1; b < count; ++b) {
                 for (int c = b + 1; c < count; ++c) {
-                    fn(a, b, c, -1);
+                    fn(a, b, c, -1, -1);
                 }
             }
         }
@@ -49,38 +51,53 @@ inline void for_each_combo_up_to4(int count, int choose, const Fn& fn) {
             for (int b = a + 1; b < count; ++b) {
                 for (int c = b + 1; c < count; ++c) {
                     for (int d = c + 1; d < count; ++d) {
-                        fn(a, b, c, d);
+                        fn(a, b, c, d, -1);
                     }
                 }
             }
         }
+        return;
+    }
+    if (choose == 5) {
+        for (int a = 0; a < count; ++a) {
+            for (int b = a + 1; b < count; ++b) {
+                for (int c = b + 1; c < count; ++c) {
+                    for (int d = c + 1; d < count; ++d) {
+                        for (int e = d + 1; e < count; ++e) {
+                            fn(a, b, c, d, e);
+                        }
+                    }
+                }
+            }
+        }
+        return;
     }
 }
 
 inline uint64_t pool_mask_from_selection(
     const CandidateState& st,
     const int* pool,
-    int i1,
-    int i2,
-    int i3,
-    int i4) {
+    int i1, int i2, int i3, int i4, int i5) {
     uint64_t m = 0ULL;
     if (i1 >= 0) m |= st.cands[pool[i1]];
     if (i2 >= 0) m |= st.cands[pool[i2]];
     if (i3 >= 0) m |= st.cands[pool[i3]];
     if (i4 >= 0) m |= st.cands[pool[i4]];
+    if (i5 >= 0) m |= st.cands[pool[i5]];
     return m;
 }
 
-inline bool idx_equals_any_selected(int idx, const int* pool, int i1, int i2, int i3, int i4) {
+inline bool idx_equals_any_selected(int idx, const int* pool, int i1, int i2, int i3, int i4, int i5) {
     return (i1 >= 0 && idx == pool[i1]) ||
            (i2 >= 0 && idx == pool[i2]) ||
            (i3 >= 0 && idx == pool[i3]) ||
-           (i4 >= 0 && idx == pool[i4]);
+           (i4 >= 0 && idx == pool[i4]) ||
+           (i5 >= 0 && idx == pool[i5]);
 }
 
 inline int sue_de_coq_selection_cap(const CandidateState& st) {
     const int box_area = st.topo->box_rows * st.topo->box_cols;
+    // Obejmuje warianty SDC do 5 wykluczeń dla mniejszych / rzadkich plansz
     if (st.topo->n <= 16 || box_area <= 12) return 5;
     return 3;
 }
@@ -141,15 +158,15 @@ inline ApplyResult scan_row_box_intersections(CandidateState& st, bool& progress
                         const int target_cands = a_cnt + b_choose + c_choose;
                         if (std::popcount(ma) > target_cands) continue;
 
-                        for_each_combo_up_to4(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4) {
+                        for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
                             if (contradiction) return;
-                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4);
+                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
                             const uint64_t row_union = ma | mb;
                             if (std::popcount(row_union) != (a_cnt + b_choose)) return;
 
-                            for_each_combo_up_to4(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4) {
+                            for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
                                 if (contradiction) return;
-                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4);
+                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
                                 const uint64_t box_union = ma | mc;
                                 if (std::popcount(box_union) != (a_cnt + c_choose)) return;
 
@@ -164,7 +181,8 @@ inline ApplyResult scan_row_box_intersections(CandidateState& st, bool& progress
                                         if (c >= c0 && c < c0 + st.topo->box_cols) continue;
                                         const int idx = intersect_row * n + c;
                                         if (st.board->values[idx] != 0) continue;
-                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4)) continue;
+                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue;
+                                        
                                         const ApplyResult er = st.eliminate(idx, row_union);
                                         if (er == ApplyResult::Contradiction) {
                                             contradiction = true;
@@ -176,12 +194,13 @@ inline ApplyResult scan_row_box_intersections(CandidateState& st, bool& progress
 
                                 if (box_union != 0ULL) {
                                     for (int b_dr = 0; b_dr < st.topo->box_rows; ++b_dr) {
-                                            if (b_dr == dr) continue;
-                                            for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
-                                                const int idx = (r0 + b_dr) * n + (c0 + b_dc);
-                                                if (st.board->values[idx] != 0) continue;
-                                                if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4)) continue;
-                                                const ApplyResult er = st.eliminate(idx, box_union);
+                                        if (b_dr == dr) continue;
+                                        for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
+                                            const int idx = (r0 + b_dr) * n + (c0 + b_dc);
+                                            if (st.board->values[idx] != 0) continue;
+                                            if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue;
+                                            
+                                            const ApplyResult er = st.eliminate(idx, box_union);
                                             if (er == ApplyResult::Contradiction) {
                                                 contradiction = true;
                                                 return;
@@ -258,15 +277,15 @@ inline ApplyResult scan_col_box_intersections(CandidateState& st, bool& progress
                         const int target_cands = a_cnt + b_choose + c_choose;
                         if (std::popcount(ma) > target_cands) continue;
 
-                        for_each_combo_up_to4(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4) {
+                        for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
                             if (contradiction) return;
-                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4);
+                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
                             const uint64_t col_union = ma | mb;
                             if (std::popcount(col_union) != (a_cnt + b_choose)) return;
 
-                            for_each_combo_up_to4(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4) {
+                            for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
                                 if (contradiction) return;
-                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4);
+                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
                                 const uint64_t box_union = ma | mc;
                                 if (std::popcount(box_union) != (a_cnt + c_choose)) return;
 
@@ -281,7 +300,8 @@ inline ApplyResult scan_col_box_intersections(CandidateState& st, bool& progress
                                         if (r >= r0 && r < r0 + st.topo->box_rows) continue;
                                         const int idx = r * n + intersect_col;
                                         if (st.board->values[idx] != 0) continue;
-                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4)) continue;
+                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue;
+                                        
                                         const ApplyResult er = st.eliminate(idx, col_union);
                                         if (er == ApplyResult::Contradiction) {
                                             contradiction = true;
@@ -297,7 +317,8 @@ inline ApplyResult scan_col_box_intersections(CandidateState& st, bool& progress
                                             if (b_dc == dc) continue;
                                             const int idx = (r0 + b_dr) * n + (c0 + b_dc);
                                             if (st.board->values[idx] != 0) continue;
-                                            if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4)) continue;
+                                            if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue;
+                                            
                                             const ApplyResult er = st.eliminate(idx, box_union);
                                             if (er == ApplyResult::Contradiction) {
                                                 contradiction = true;
