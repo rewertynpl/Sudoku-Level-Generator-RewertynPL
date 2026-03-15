@@ -20,6 +20,7 @@
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
 #include "../shared/state_probe.h"
+#include "p8_density.h"
 
 // ModuĹ‚y pomocnicze (kompozytu do SK Loop)
 #include "../p7_nightmare/continuous_nice_loop.h"
@@ -53,7 +54,7 @@ inline ApplyResult apply_sk_loop_exact(CandidateState& st, StrategyStats& s, Gen
     
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 6 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::SKLoop, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -300,7 +301,7 @@ inline ApplyResult apply_sk_loop(CandidateState& st, StrategyStats& s, GenericLo
     ++s.use_count;
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 5 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::SKLoop, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }

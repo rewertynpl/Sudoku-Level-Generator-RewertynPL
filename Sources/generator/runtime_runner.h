@@ -183,16 +183,6 @@ inline GenerateRunResult run_generic_sudoku(
     const bool is_25x25_plus_p8_geometry = is_25x25_plus_geometry && wants_p8;
 
     if (!run_cfg.fast_test_mode) {
-        if (run_cfg.max_attempts == 0) {
-            const uint64_t scale = wants_p8 ? 8192ULL : (wants_p7_plus ? 4096ULL : 1024ULL);
-            run_cfg.max_attempts = std::max<uint64_t>(128ULL, run_cfg.target_puzzles * scale);
-        }
-        if (run_cfg.max_total_time_s == 0) {
-            run_cfg.max_total_time_s = wants_p8 ? 180ULL : (wants_p7_plus ? 120ULL : 60ULL);
-        }
-        if (run_cfg.attempt_time_budget_s <= 0.0) {
-            run_cfg.attempt_time_budget_s = wants_p8 ? 2.0 : (wants_p7_plus ? 1.5 : 1.0);
-        }
         if (run_cfg.attempt_node_budget == 0) {
             const uint64_t suggested = suggest_attempt_node_budget(
                 run_cfg.box_rows,

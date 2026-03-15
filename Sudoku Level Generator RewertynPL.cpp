@@ -398,6 +398,8 @@ inline void print_production_help(std::ostream& out) {
     out << "  --allow-proxy-advanced          Allow proxy/hybrid advanced strategy confirmation\n";
     out << "  --max-pattern-depth <0..8>      Cap advanced pattern depth (0=auto)\n";
     out << "  --fast-test                     Fast smoke mode (relaxed contracts, short budgets)\n";
+    out << "  --attempt-time-budget-s <sec>   Per-attempt timeout (0=unlimited)\n";
+    out << "  --max-attempts <uint64>         Max attempts across all workers (0=unlimited)\n";
     out << "  --max-total-time-s <uint64>     Global runtime timeout (0=none)\n";
     out << "  --run-quality-benchmark <file>  Write strategy audit report (.txt + .csv)\n";
     out << "  --list-geometries               Print supported geometries\n";

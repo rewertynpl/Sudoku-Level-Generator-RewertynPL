@@ -17,6 +17,7 @@
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
 #include "../shared/state_probe.h"
+#include "p8_density.h"
 
 #include "../p7_nightmare/aic_grouped_aic.h"
 #include "../p7_nightmare/grouped_x_cycle.h"
@@ -241,14 +242,14 @@ inline bool msls_certify_mode_allowed(const CandidateState& st) {
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n > 25) return false;
-    return st.board->empty_cells <= (nn - 7 * n);
+    return !p8_board_too_dense(RequiredStrategy::MSLS, n, nn, st.board->empty_cells);
 }
 
 inline bool msls_anchor_fallback_allowed(const CandidateState& st) {
     if (msls_certify_mode_allowed(st)) return false;
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    return st.board->empty_cells <= (nn - 6 * n);
+    return !p8_board_too_dense(RequiredStrategy::MSLS, n, nn, st.board->empty_cells);
 }
 
 inline ApplyResult msls_sector_pass(
@@ -257,7 +258,7 @@ inline ApplyResult msls_sector_pass(
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n < 6 || n > 64) return ApplyResult::NoProgress;
-    if (st.board->empty_cells > (nn - 6 * n)) return ApplyResult::NoProgress;
+    if (p8_board_too_dense(RequiredStrategy::MSLS, n, nn, st.board->empty_cells)) return ApplyResult::NoProgress;
 
     auto& sp = shared::exact_pattern_scratchpad();
     int cand_cells[512]{};
@@ -781,7 +782,7 @@ inline ApplyResult apply_msls(CandidateState& st, StrategyStats& s, GenericLogic
 
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 5 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::MSLS, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -833,7 +834,7 @@ inline ApplyResult apply_msls(CandidateState& st, StrategyStats& s, GenericLogic
     }
 
     // Kraken fallback only for very late boards.
-    if (st.board->empty_cells <= (nn - 7 * n)) {
+    if (!p8_board_too_dense(RequiredStrategy::MSLS, n, nn, st.board->empty_cells)) {
         ar = p7_nightmare::apply_kraken_fish(st, tmp, r);
         if (ar == ApplyResult::Contradiction) {
             s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;

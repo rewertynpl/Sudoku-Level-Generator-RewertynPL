@@ -19,6 +19,7 @@
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
 #include "../shared/state_probe.h"
+#include "p8_density.h"
 
 // DoĹ‚Ä…czamy wymagane moduły dla POM 
 #include "msls.h"
@@ -338,28 +339,28 @@ inline bool pom_global_family_allowed(const CandidateState& st) {
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n > 20) return false;
-    return st.board->empty_cells <= (nn - 7 * n);
+    return !p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells);
 }
 
 inline bool pom_quad_global_family_allowed(const CandidateState& st) {
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n > 16) return false;
-    return st.board->empty_cells <= (nn - 8 * n);
+    return !p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells);
 }
 
 inline bool pom_penta_global_family_allowed(const CandidateState& st) {
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n > 12) return false;
-    return st.board->empty_cells <= (nn - 9 * n);
+    return !p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells);
 }
 
 inline bool pom_hexa_global_family_allowed(const CandidateState& st) {
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     if (n > 9) return false;
-    return st.board->empty_cells <= (nn - 10 * n);
+    return !p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells);
 }
 
 inline ApplyResult apply_pom_global_digit_hexa_family_exact(
@@ -473,32 +474,32 @@ inline ApplyResult apply_pom_global_digit_penta_family_exact(
     int houses[ExactPatternScratchpad::MAX_HOUSES]{};
     int counts[ExactPatternScratchpad::MAX_HOUSES]{};
     int cells1[8]{}, cells2[8]{}, cells3[8]{}, cells4[8]{}, cells5[8]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level1_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level1_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level2_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level2_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level3_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level3_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level4_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level4_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level4_box_used[shared::ExactPatternScratchpad::MAX_N]{};
     auto& sp = shared::exact_pattern_scratchpad();
+    auto* root_cands = sp.p8_cands_backup[0];
+    auto* root_values = sp.p8_values_backup[0];
+    auto* root_row_used = sp.p8_row_used_backup[0];
+    auto* root_col_used = sp.p8_col_used_backup[0];
+    auto* root_box_used = sp.p8_box_used_backup[0];
+    auto* level1_cands = sp.p8_cands_backup[1];
+    auto* level1_values = sp.p8_values_backup[1];
+    auto* level1_row_used = sp.p8_row_used_backup[1];
+    auto* level1_col_used = sp.p8_col_used_backup[1];
+    auto* level1_box_used = sp.p8_box_used_backup[1];
+    auto* level2_cands = sp.p8_cands_backup[2];
+    auto* level2_values = sp.p8_values_backup[2];
+    auto* level2_row_used = sp.p8_row_used_backup[2];
+    auto* level2_col_used = sp.p8_col_used_backup[2];
+    auto* level2_box_used = sp.p8_box_used_backup[2];
+    auto* level3_cands = sp.p8_cands_backup[3];
+    auto* level3_values = sp.p8_values_backup[3];
+    auto* level3_row_used = sp.p8_row_used_backup[3];
+    auto* level3_col_used = sp.p8_col_used_backup[3];
+    auto* level3_box_used = sp.p8_box_used_backup[3];
+    auto* level4_cands = sp.p8_cands_backup[4];
+    auto* level4_values = sp.p8_values_backup[4];
+    auto* level4_row_used = sp.p8_row_used_backup[4];
+    auto* level4_col_used = sp.p8_col_used_backup[4];
+    auto* level4_box_used = sp.p8_box_used_backup[4];
 
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
@@ -572,7 +573,7 @@ inline ApplyResult apply_pom_global_digit_penta_family_exact(
                                 const int hs[5] = {h1, h2, h3, h4, h5};
                                 sp.reset_pom();
                                 const PomUndoMarker root_marker = pom_begin_frame(sp);
-                                uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                                auto* inter_cands_fast = shared::intersection_slot(sp, 5);
                                 pom_reset_intersection(inter_cands_fast, nn);
                                 int valid_paths_fast = 0;
                                 pom_capture_digit_paths_recursive(
@@ -592,7 +593,7 @@ inline ApplyResult apply_pom_global_digit_penta_family_exact(
                             std::copy_n(st.board->box_used.data(), n, root_box_used);
                             const int root_empty = st.board->empty_cells;
 
-                            uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
+                            auto* inter_cands = shared::intersection_slot(sp, 6);
                             for (int i = 0; i < nn; ++i) inter_cands[i] = ~0ULL;
                             int valid_paths = 0;
 
@@ -788,27 +789,27 @@ inline ApplyResult apply_pom_global_digit_quad_family_exact(
     int houses[ExactPatternScratchpad::MAX_HOUSES]{};
     int counts[ExactPatternScratchpad::MAX_HOUSES]{};
     int cells1[8]{}, cells2[8]{}, cells3[8]{}, cells4[8]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level1_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level1_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level2_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level2_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level3_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level3_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level3_box_used[shared::ExactPatternScratchpad::MAX_N]{};
     auto& sp = shared::exact_pattern_scratchpad();
+    auto* root_cands = sp.p8_cands_backup[0];
+    auto* root_values = sp.p8_values_backup[0];
+    auto* root_row_used = sp.p8_row_used_backup[0];
+    auto* root_col_used = sp.p8_col_used_backup[0];
+    auto* root_box_used = sp.p8_box_used_backup[0];
+    auto* level1_cands = sp.p8_cands_backup[1];
+    auto* level1_values = sp.p8_values_backup[1];
+    auto* level1_row_used = sp.p8_row_used_backup[1];
+    auto* level1_col_used = sp.p8_col_used_backup[1];
+    auto* level1_box_used = sp.p8_box_used_backup[1];
+    auto* level2_cands = sp.p8_cands_backup[2];
+    auto* level2_values = sp.p8_values_backup[2];
+    auto* level2_row_used = sp.p8_row_used_backup[2];
+    auto* level2_col_used = sp.p8_col_used_backup[2];
+    auto* level2_box_used = sp.p8_box_used_backup[2];
+    auto* level3_cands = sp.p8_cands_backup[3];
+    auto* level3_values = sp.p8_values_backup[3];
+    auto* level3_row_used = sp.p8_row_used_backup[3];
+    auto* level3_col_used = sp.p8_col_used_backup[3];
+    auto* level3_box_used = sp.p8_box_used_backup[3];
 
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
@@ -874,7 +875,7 @@ inline ApplyResult apply_pom_global_digit_quad_family_exact(
                             const int hs[4] = {h1, h2, h3, h4};
                             sp.reset_pom();
                             const PomUndoMarker root_marker = pom_begin_frame(sp);
-                            uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                            auto* inter_cands_fast = shared::intersection_slot(sp, 5);
                             pom_reset_intersection(inter_cands_fast, nn);
                             int valid_paths_fast = 0;
                             pom_capture_digit_paths_recursive(
@@ -894,7 +895,7 @@ inline ApplyResult apply_pom_global_digit_quad_family_exact(
                         std::copy_n(st.board->box_used.data(), n, root_box_used);
                         const int root_empty = st.board->empty_cells;
 
-                        uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
+                        auto* inter_cands = shared::intersection_slot(sp, 6);
                         for (int i = 0; i < nn; ++i) inter_cands[i] = ~0ULL;
                         int valid_paths = 0;
 
@@ -1064,22 +1065,22 @@ inline ApplyResult apply_pom_global_digit_family_exact(
     int houses[ExactPatternScratchpad::MAX_HOUSES]{};
     int counts[ExactPatternScratchpad::MAX_HOUSES]{};
     int cells1[8]{}, cells2[8]{}, cells3[8]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level1_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level1_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level1_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t level2_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t level2_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t level2_box_used[shared::ExactPatternScratchpad::MAX_N]{};
     auto& sp = shared::exact_pattern_scratchpad();
+    auto* root_cands = sp.p8_cands_backup[0];
+    auto* root_values = sp.p8_values_backup[0];
+    auto* root_row_used = sp.p8_row_used_backup[0];
+    auto* root_col_used = sp.p8_col_used_backup[0];
+    auto* root_box_used = sp.p8_box_used_backup[0];
+    auto* level1_cands = sp.p8_cands_backup[1];
+    auto* level1_values = sp.p8_values_backup[1];
+    auto* level1_row_used = sp.p8_row_used_backup[1];
+    auto* level1_col_used = sp.p8_col_used_backup[1];
+    auto* level1_box_used = sp.p8_box_used_backup[1];
+    auto* level2_cands = sp.p8_cands_backup[2];
+    auto* level2_values = sp.p8_values_backup[2];
+    auto* level2_row_used = sp.p8_row_used_backup[2];
+    auto* level2_col_used = sp.p8_col_used_backup[2];
+    auto* level2_box_used = sp.p8_box_used_backup[2];
 
     for (int d = 1; d <= n; ++d) {
         const uint64_t bit = (1ULL << (d - 1));
@@ -1136,7 +1137,7 @@ inline ApplyResult apply_pom_global_digit_family_exact(
                         const int hs[3] = {h1, h2, h3};
                         sp.reset_pom();
                         const PomUndoMarker root_marker = pom_begin_frame(sp);
-                        uint64_t inter_cands_fast[shared::ExactPatternScratchpad::MAX_NN]{};
+                        auto* inter_cands_fast = shared::intersection_slot(sp, 5);
                         pom_reset_intersection(inter_cands_fast, nn);
                         int valid_paths_fast = 0;
                         pom_capture_digit_paths_recursive(
@@ -1156,7 +1157,7 @@ inline ApplyResult apply_pom_global_digit_family_exact(
                     std::copy_n(st.board->box_used.data(), n, root_box_used);
                     const int root_empty = st.board->empty_cells;
 
-                    uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
+                    auto* inter_cands = shared::intersection_slot(sp, 6);
                     for (int i = 0; i < nn; ++i) inter_cands[i] = ~0ULL;
                     int valid_paths = 0;
 
@@ -1287,7 +1288,7 @@ inline ApplyResult apply_pom_digit_pair_family_exact(
 
     const int nn = st.topo->nn;
     const int n = st.topo->n;
-    if (st.board->empty_cells > (nn - 6 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -1371,7 +1372,7 @@ inline ApplyResult apply_pom_digit_family_exact(
     auto& sp = shared::exact_pattern_scratchpad();
     const int nn = st.topo->nn;
     const int n = st.topo->n;
-    if (st.board->empty_cells > (nn - 6 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -1525,7 +1526,7 @@ inline ApplyResult apply_pom_exact(CandidateState& st, StrategyStats& s, Generic
     auto& sp = shared::exact_pattern_scratchpad();
     const int nn = st.topo->nn;
     const int n = st.topo->n;
-    if (st.board->empty_cells > (nn - 6 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -1665,7 +1666,7 @@ inline ApplyResult apply_pattern_overlay_method(CandidateState& st, StrategyStat
     
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 7 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::PatternOverlayMethod, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }

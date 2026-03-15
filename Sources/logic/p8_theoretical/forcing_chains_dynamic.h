@@ -573,18 +573,19 @@ inline ApplyResult forcing_dynamic_house_digit_pass(
     const int n = st.topo->n;
     const int nn = st.topo->nn;
     const int house_count = static_cast<int>(st.topo->house_offsets.size()) - 1;
-    uint64_t inter_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t nested_inter[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t root_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t root_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t root_box_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_cands[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint16_t branch_values[shared::ExactPatternScratchpad::MAX_NN]{};
-    uint64_t branch_row_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_col_used[shared::ExactPatternScratchpad::MAX_N]{};
-    uint64_t branch_box_used[shared::ExactPatternScratchpad::MAX_N]{};
+    auto& sp = shared::exact_pattern_scratchpad();
+    auto* inter_cands = shared::intersection_slot(sp, 0);
+    auto* nested_inter = shared::intersection_slot(sp, 1);
+    auto* root_cands = sp.p8_cands_backup[0];
+    auto* root_values = sp.p8_values_backup[0];
+    auto* root_row_used = sp.p8_row_used_backup[0];
+    auto* root_col_used = sp.p8_col_used_backup[0];
+    auto* root_box_used = sp.p8_box_used_backup[0];
+    auto* branch_cands = sp.p8_cands_backup[1];
+    auto* branch_values = sp.p8_values_backup[1];
+    auto* branch_row_used = sp.p8_row_used_backup[1];
+    auto* branch_col_used = sp.p8_col_used_backup[1];
+    auto* branch_box_used = sp.p8_box_used_backup[1];
     int tested_houses = 0;
 
     for (int h = 0; h < house_count; ++h) {

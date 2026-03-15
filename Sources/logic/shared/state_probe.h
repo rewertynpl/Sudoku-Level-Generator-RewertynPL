@@ -32,6 +32,32 @@ inline void restore_state(CandidateState& st, ExactPatternScratchpad& sp) {
     st.board->empty_cells = sp.dyn_empty_backup;
 }
 
+inline void snapshot_state_slot(CandidateState& st, ExactPatternScratchpad& sp, int slot) {
+    const int nn = st.topo->nn;
+    const int n = st.topo->n;
+    std::copy_n(st.cands, nn, sp.p8_cands_backup[slot]);
+    std::copy_n(st.board->values.data(), nn, sp.p8_values_backup[slot]);
+    std::copy_n(st.board->row_used.data(), n, sp.p8_row_used_backup[slot]);
+    std::copy_n(st.board->col_used.data(), n, sp.p8_col_used_backup[slot]);
+    std::copy_n(st.board->box_used.data(), n, sp.p8_box_used_backup[slot]);
+    sp.p8_empty_backup[slot] = st.board->empty_cells;
+}
+
+inline void restore_state_slot(CandidateState& st, ExactPatternScratchpad& sp, int slot) {
+    const int nn = st.topo->nn;
+    const int n = st.topo->n;
+    std::copy_n(sp.p8_cands_backup[slot], nn, st.cands);
+    std::copy_n(sp.p8_values_backup[slot], nn, st.board->values.data());
+    std::copy_n(sp.p8_row_used_backup[slot], n, st.board->row_used.data());
+    std::copy_n(sp.p8_col_used_backup[slot], n, st.board->col_used.data());
+    std::copy_n(sp.p8_box_used_backup[slot], n, st.board->box_used.data());
+    st.board->empty_cells = sp.p8_empty_backup[slot];
+}
+
+inline uint64_t* intersection_slot(ExactPatternScratchpad& sp, int slot) {
+    return sp.p8_intersection_backup[slot];
+}
+
 inline bool propagate_singles(CandidateState& st, int max_steps) {
     const int nn = st.topo->nn;
     for (int step = 0; step < max_steps; ++step) {

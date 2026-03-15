@@ -573,7 +573,7 @@ void init_form_model(GuiAppState* state) {
     add_field(std::move(force_seed));
     add_field(make_field(F_ATTEMPT_TIME_BUDGET, FormFieldType::Int, L"attempt_time_budget_s (0=brak limitu):", L"0"));
     add_field(make_field(F_ATTEMPT_NODE_BUDGET, FormFieldType::Int, L"attempt_node_budget (0=brak limitu):", L"0"));
-    add_field(make_field(F_MAX_ATTEMPTS, FormFieldType::Int, L"max_attempts (0=bez limitu):", L"0"));
+    add_field(make_field(F_MAX_ATTEMPTS, FormFieldType::Int, L"max_attempts (0=naprawde bez limitu):", L"0"));
     add_field(make_field(F_MAX_TOTAL_TIME, FormFieldType::Int, L"max_total_time_s (0=bez limitu, CAŁE URUCHOMIENIE):", L"0"));
 
     FormField strategy;

@@ -763,8 +763,8 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     if (strategy_prefers_preserved_core_seed_window(required)) {
         apply_scaled_clue_window(
             n, nn, min_clues, max_clues,
-            0.30, 0.42,
-            0.42, 0.56);
+            0.32, 0.56,
+            0.42, 0.70);
     }
 
     if (strategy_prefers_sparse_p6_bottleneck_window(required)) {
@@ -779,8 +779,8 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     if (strategy_prefers_relaxed_theoretical_clue_ceiling(required)) {
         apply_scaled_clue_window(
             n, nn, min_clues, max_clues,
-            0.35, 0.48,
-            0.50, 0.64);
+            0.35, 0.60,
+            0.50, 0.75);
     }
 
     if (strategy_prefers_forcing_family_clue_ceiling(required)) {
@@ -793,8 +793,8 @@ inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficu
     if (strategy_prefers_loop_overlay_clue_ceiling(required)) {
         apply_scaled_clue_window(
             n, nn, min_clues, max_clues,
-            0.28, 0.40,
-            0.40, 0.52);
+            0.34, 0.58,
+            0.44, 0.72);
     }
 
     return {min_clues, max_clues};

@@ -18,6 +18,7 @@
 #include "../shared/exact_pattern_scratchpad.h"
 #include "../shared/state_probe.h"
 #include "../p7_nightmare/aic_grouped_aic.h"
+#include "p8_density.h"
 
 namespace sudoku_hpc::logic::p8_theoretical {
 
@@ -1117,7 +1118,7 @@ inline ApplyResult apply_exocet_exact(CandidateState& st, StrategyStats& s, Gene
 
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 4 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::Exocet, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -1147,7 +1148,7 @@ inline ApplyResult apply_exocet(CandidateState& st, StrategyStats& s, GenericLog
 
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 5 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::Exocet, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -1197,7 +1198,7 @@ inline ApplyResult apply_senior_exocet(CandidateState& st, StrategyStats& s, Gen
 
     const int n = st.topo->n;
     const int nn = st.topo->nn;
-    if (st.board->empty_cells > (nn - 6 * n)) {
+    if (p8_board_too_dense(RequiredStrategy::SeniorExocet, n, nn, st.board->empty_cells)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }

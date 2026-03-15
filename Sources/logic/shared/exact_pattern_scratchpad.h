@@ -49,6 +49,7 @@ struct alignas(64) ExactPatternScratchpad {
     static constexpr int MAX_BFS = MAX_NN * 4;
     static constexpr int MAX_CHAIN = MAX_NN * 8;
     static constexpr int MAX_LINK_EDGES = MAX_NN * 48;
+    static constexpr int MAX_NESTING_LEVELS = 8;
 
     // ------------------------------------------------------------------------
     // Pamięć współdzielona (General BFS)
@@ -164,6 +165,14 @@ struct alignas(64) ExactPatternScratchpad {
     uint64_t dyn_col_used_backup[MAX_N]{};
     uint64_t dyn_box_used_backup[MAX_N]{};
     int dyn_empty_backup = 0;
+
+    uint64_t p8_cands_backup[MAX_NESTING_LEVELS][MAX_NN]{};
+    uint16_t p8_values_backup[MAX_NESTING_LEVELS][MAX_NN]{};
+    uint64_t p8_row_used_backup[MAX_NESTING_LEVELS][MAX_N]{};
+    uint64_t p8_col_used_backup[MAX_NESTING_LEVELS][MAX_N]{};
+    uint64_t p8_box_used_backup[MAX_NESTING_LEVELS][MAX_N]{};
+    int p8_empty_backup[MAX_NESTING_LEVELS]{};
+    uint64_t p8_intersection_backup[MAX_NESTING_LEVELS][MAX_NN]{};
 
     // Struktura zrzutu dla Pattern Overlay Method (DFS fallback P8)
     std::array<PomFrame, MAX_N> pom_stack{};
