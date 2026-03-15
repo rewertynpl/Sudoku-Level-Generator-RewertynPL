@@ -337,6 +337,10 @@ inline void expand_exact_template_skeleton(
         box_union[box] |= mask;
     }
 
+    int added_row[64]{};
+    int added_col[64]{};
+    int added_box[64]{};
+
     int added = 0;
     for (int pass = 0; pass < 2 && added < extra_cap; ++pass) {
         const int need_houses = (pass == 0) ? 2 : 1;
@@ -367,7 +371,19 @@ inline void expand_exact_template_skeleton(
             mask &= full;
             mask = truncate_mask_bits(mask, keep_bits);
             if (mask == 0ULL || mask == full || std::popcount(mask) < 2) continue;
-            if (plan.add_skeleton(idx, mask)) ++added;
+
+            // ZABEZPIECZENIE przed Pigeonhole Principle: Jeśli dom jest w pełni wykorzystany, powstrzymaj układ przed zamkiem
+            const int bits = std::popcount(mask);
+            if (row_count[row] + added_row[row] >= bits) continue;
+            if (col_count[col] + added_col[col] >= bits) continue;
+            if (box_count[box] + added_box[box] >= bits) continue;
+
+            if (plan.add_skeleton(idx, mask)) {
+                ++added;
+                ++added_row[row];
+                ++added_col[col];
+                ++added_box[box];
+            }
         }
     }
 }
@@ -376,24 +392,14 @@ inline void protect_exact_template_skeleton(
     PatternScratch& sc,
     const ExactPatternTemplatePlan& plan,
     RequiredStrategy required_strategy) {
-    const bool is_fragile_pattern = pattern_required_is_fragile_candidate_structure(required_strategy);
 
-    if (is_fragile_pattern) {
-        for (int i = 0; i < plan.anchor_count; ++i) {
-            const int idx = plan.anchor_idx[static_cast<size_t>(i)];
-            if (idx < 0 || idx >= sc.prepared_nn) continue;
-            sc.protected_cells[static_cast<size_t>(idx)] = 1;
-        }
-    }
-
+    // Poprawka: Chroń szkielet z otoczenia narzucający logikę na układy, ale NIE CHROŃ 
+    // głównych trzonów strategii (Anchorów). Ich zamaskowanie ukrywa cyfry przed detekcją na planszy.
     for (int i = 0; i < plan.skeleton_count; ++i) {
         const int idx = plan.skeleton_idx[static_cast<size_t>(i)];
         if (idx < 0 || idx >= sc.prepared_nn) continue;
         if (plan.find_anchor(idx) >= 0) {
-            continue;
-        }
-        if (is_fragile_pattern) {
-            continue;
+            continue; 
         }
         sc.protected_cells[static_cast<size_t>(idx)] = 1;
     }
