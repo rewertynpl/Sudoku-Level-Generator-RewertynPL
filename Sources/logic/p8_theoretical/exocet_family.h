@@ -6,7 +6,6 @@
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
-
 #pragma once
 
 #include <algorithm>
@@ -709,48 +708,6 @@ inline ApplyResult exocet_apply_senior_witness_target_placement(
             exocet_push_unique_cell(allowed, allowed_count, t1);
             exocet_push_unique_cell(allowed, allowed_count, t2);
             matched = true;
-        } else if (row1_live > 0 && col1_live == 1 && col2_live == 1 && row2_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && col1_live == 1 && col2_live == 1 && row1_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && row2_live > 0 && col1_live == 1 && col2_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && row2_live > 0 && col2_live == 1 && col1_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (col1_live > 0 && col2_live > 0 && row1_live == 1 && row2_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (col1_live > 0 && col2_live > 0 && row2_live == 1 && row1_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
         } else if (row1_live > 0 && col1_live > 0 && row2_live == 1 && col2_live == 0) {
             exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
             exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
@@ -779,66 +736,6 @@ inline ApplyResult exocet_apply_senior_witness_target_placement(
             exocet_push_unique_cell(allowed, allowed_count, t1);
             exocet_push_unique_cell(allowed, allowed_count, t2);
             matched = true;
-        } else if (row1_live > 0 && col1_live > 0 && col2_live == 1 && row2_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && col2_live > 0 && col1_live == 1 && row2_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && col1_live > 0 && col2_live == 1 && row1_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && col2_live > 0 && col1_live == 1 && row1_live == 0) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && row2_live == 1 && col1_live == 1 && col2_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && row1_live == 1 && col1_live == 1 && col2_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (col1_live > 0 && row1_live == 1 && row2_live == 1 && col2_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (col2_live > 0 && row1_live == 1 && row2_live == 1 && col1_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
         } else if (row1_live > 0 && row2_live > 0 && col1_live == 1 && col2_live == 1) {
             exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
             exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
@@ -852,38 +749,6 @@ inline ApplyResult exocet_apply_senior_witness_target_placement(
             exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
             exocet_push_unique_cell(allowed, allowed_count, row1_idx);
             exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && col1_live > 0 && row2_live == 1 && col2_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row1_live > 0 && col2_live > 0 && row2_live == 1 && col1_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row1_targets, row1_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && col1_live > 0 && row1_live == 1 && col2_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col1_targets, col1_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col2_idx);
-            exocet_push_unique_cell(allowed, allowed_count, t1);
-            exocet_push_unique_cell(allowed, allowed_count, t2);
-            matched = true;
-        } else if (row2_live > 0 && col2_live > 0 && row1_live == 1 && col1_live == 1) {
-            exocet_push_live_targets_for_bit(st, bit, row2_targets, row2_target_count, allowed, allowed_count);
-            exocet_push_live_targets_for_bit(st, bit, col2_targets, col2_target_count, allowed, allowed_count);
-            exocet_push_unique_cell(allowed, allowed_count, row1_idx);
-            exocet_push_unique_cell(allowed, allowed_count, col1_idx);
             exocet_push_unique_cell(allowed, allowed_count, t1);
             exocet_push_unique_cell(allowed, allowed_count, t2);
             matched = true;
@@ -1166,11 +1031,10 @@ inline ApplyResult apply_exocet(CandidateState& st, StrategyStats& s, GenericLog
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar;
     }
-    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::Exocet)) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::NoProgress;
-    }
 
+    // Usunięta bramka `required_exact_strategy_active` - 
+    // Fallbacki działają dla Generatora Szablonów i oczyszczają planszę z szumu.
+    
     bool used = false;
     const int depth_cap = std::clamp(8 + st.board->empty_cells / std::max(1, n), 10, 16);
     ar = p7_nightmare::bounded_implication_core(st, tmp, r, depth_cap, used);
@@ -1223,11 +1087,9 @@ inline ApplyResult apply_senior_exocet(CandidateState& st, StrategyStats& s, Gen
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar;
     }
-    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::SeniorExocet)) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::NoProgress;
-    }
 
+    // Usunięta bramka `required_exact_strategy_active` - Fallbacki P8 przywrócone
+    
     bool used = false;
     const int depth_cap = std::clamp(12 + st.board->empty_cells / std::max(1, n), 14, 24);
     ar = p7_nightmare::bounded_implication_core(st, tmp, r, depth_cap, used);

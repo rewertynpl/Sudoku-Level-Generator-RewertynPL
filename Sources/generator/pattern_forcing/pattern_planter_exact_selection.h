@@ -1,5 +1,12 @@
+// ============================================================================
+// SUDOKU HPC - EXACT PATTERN FORCING
+// Moduł: pattern_planter_exact_selection.h
+// Opis: Wybiera i dopasowuje szablony geometryczne (Exact Templates) dla 
+//       żądanych strategii. Decyduje o doborze odpowiedniego buildera, 
+//       a także obsługuje fallback do innych strategii z tego samego 
+//       lub niższego poziomu, optymalizując wynik (Zero-Allocation).
+// ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
-
 
 #pragma once
 
@@ -15,17 +22,21 @@ inline bool try_exact_templates_for_level(
     ExactPatternTemplatePlan& exact_plan,
     PatternKind& out_kind,
     int* out_score = nullptr) {
+    
     exact_plan = {};
     out_kind = PatternKind::None;
+    
     int best_score = -1;
     int best_family_score = -1;
     PatternKind best_any_kind = PatternKind::None;
     PatternKind best_family_kind = PatternKind::None;
     ExactPatternTemplatePlan best_any_plan{};
     ExactPatternTemplatePlan best_family_plan{};
+    
     const PatternStrategyPolicy preferred_policy = pattern_strategy_policy(required_strategy, forcing_level);
     const PatternKind preferred_kind = preferred_policy.kind;
 
+    // Ewaluator - ocenia i zapamiętuje najlepszy dotychczasowy plan
     auto consider = [&](PatternKind candidate_kind, const ExactPatternTemplatePlan& candidate_plan) {
         const int score = score_exact_plan(topo, required_strategy, candidate_kind, candidate_plan);
         if (score > best_score) {
@@ -40,12 +51,16 @@ inline bool try_exact_templates_for_level(
         }
     };
 
+    // Pomocniczy menedżer powtórzeń (dla strategii o wysokim współczynniku odrzutu generowania)
     auto repeat_attempts = [&](int tries, auto&& builder) {
         for (int attempt = 0; attempt < tries; ++attempt) {
             builder();
         }
     };
 
+    // ========================================================================
+    // BINDINGI DO TEMPLATE BUILDERÓW
+    // ========================================================================
     auto try_exocet = [&](bool senior_mode) {
         ExactPatternTemplatePlan candidate{};
         if (TemplateExocet::build(topo, rng, candidate, senior_mode)) {
@@ -206,6 +221,9 @@ inline bool try_exact_templates_for_level(
     const bool strict_exact_family =
         pattern_policy_requires_exact(pattern_strategy_policy(required_strategy, forcing_level).generator_policy);
 
+    // ========================================================================
+    // WYWOŁANIE GŁÓWNEGO SZABLONU (Wg wybranej Required Strategy)
+    // ========================================================================
     switch (required_strategy) {
         case RequiredStrategy::Exocet:
             repeat_attempts(12, [&]() { try_exocet(false); });
@@ -322,6 +340,11 @@ inline bool try_exact_templates_for_level(
             break;
     }
 
+    // ========================================================================
+    // FALLBACKS (Jeśli nie wymagamy ścisłego przyporządkowania do rodziny)
+    // Tworzy urozmaicenie plansz i eliminuje ślepe zaułki poprzez zasianie 
+    // innej, łatwiejszej do wygenerowania struktury wysokiego poziomu.
+    // ========================================================================
     if (!strict_exact_family && forcing_level >= 8) {
         try_exocet(false);
         try_exocet(true);
@@ -384,6 +407,7 @@ inline bool try_exact_templates_for_level(
         try_exocet(false);
     }
 
+    // Wybór wygranego planu, priorytetyzując dopasowanie do wymaganej rodziny
     if (best_family_score >= 0) {
         exact_plan = best_family_plan;
         out_kind = best_family_kind;
@@ -393,7 +417,10 @@ inline bool try_exact_templates_for_level(
         out_kind = best_any_kind;
     }
 
-    if (out_score != nullptr) *out_score = best_score;
+    if (out_score != nullptr) {
+        *out_score = best_score;
+    }
+    
     return best_score >= 0 && exact_plan.valid;
 }
 

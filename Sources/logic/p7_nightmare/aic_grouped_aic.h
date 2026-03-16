@@ -183,11 +183,29 @@ inline ApplyResult alternating_chain_core(
                         // Zjawisko sprzeczności parzystości w łańcuchu dla tego samego węzła.
                         // Oznacza, że założenie o węźle startowym było z gruntu błędne.
                         if (vis_other[v] != 0) {
-                            const ApplyResult er = aic_eliminate_start_candidate(st, sp, bit, start);
-                            if (er == ApplyResult::Contradiction) return er;
-                            if (er == ApplyResult::Progress) {
-                                used_flag = true;
-                                return er;
+                            if (first_type == 0) {
+                                // Założenie: start=TRUE prowadzi do sprzeczności -> start=FALSE
+                                const ApplyResult er = aic_eliminate_start_candidate(st, sp, bit, start);
+                                if (er == ApplyResult::Contradiction) return er;
+                                if (er == ApplyResult::Progress) {
+                                    used_flag = true;
+                                    return er;
+                                }
+                            } else {
+                                // Założenie: start=FALSE prowadzi do sprzeczności -> start=TRUE
+                                // Jeżeli start to pojedyncza komórka (nie grupa), to eliminujemy w niej wszystkie inne bity
+                                if (sp.adj_offsets[start + 1] - sp.adj_offsets[start] == 1) {
+                                    const int cell = sp.adj_flat[sp.adj_offsets[start]];
+                                    uint64_t other_cands = st.cands[cell] & ~bit;
+                                    if (other_cands != 0ULL) {
+                                        const ApplyResult er = st.eliminate(cell, other_cands);
+                                        if (er == ApplyResult::Contradiction) return er;
+                                        if (er == ApplyResult::Progress) {
+                                            used_flag = true;
+                                            return er;
+                                        }
+                                    }
+                                }
                             }
                         }
 

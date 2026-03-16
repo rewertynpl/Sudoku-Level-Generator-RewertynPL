@@ -7,7 +7,6 @@
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
-
 #pragma once
 
 #include <algorithm>
@@ -102,117 +101,134 @@ inline int sue_de_coq_selection_cap(const CandidateState& st) {
     return 3;
 }
 
+// ----------------------------------------------------------------------------
+// SCAN ROW-BOX INTERSECTIONS
+// ----------------------------------------------------------------------------
 inline ApplyResult scan_row_box_intersections(CandidateState& st, bool& progress, StrategyStats& s, uint64_t t0) {
     const int n = st.topo->n;
     bool contradiction = false;
 
-    for (int brg = 0; brg < st.topo->box_rows_count; ++brg) {
-        for (int bcg = 0; bcg < st.topo->box_cols_count; ++bcg) {
-            const int r0 = brg * st.topo->box_rows;
-            const int c0 = bcg * st.topo->box_cols;
+    // Przeszukujemy każdy blok na planszy
+    for (int b = 0; b < n; ++b) {
+        int rows[64];
+        int row_cnt = 0;
+        const int box_p0 = st.topo->house_offsets[2 * n + b];
+        const int box_p1 = st.topo->house_offsets[2 * n + b + 1];
 
-            for (int dr = 0; dr < st.topo->box_rows; ++dr) {
-                const int intersect_row = r0 + dr;
+        // Wyznaczamy wszystkie rzędy przecinające ten blok (zabezpieczenie asymetrii)
+        for (int p = box_p0; p < box_p1; ++p) {
+            const int r = st.topo->cell_row[st.topo->houses_flat[p]];
+            bool found = false;
+            for (int i = 0; i < row_cnt; ++i) {
+                if (rows[i] == r) { found = true; break; }
+            }
+            if (!found) rows[row_cnt++] = r;
+        }
 
-                int a_cells[64]{};
-                int a_cnt = 0;
-                uint64_t ma = 0ULL;
-                for (int dc = 0; dc < st.topo->box_cols; ++dc) {
-                    const int idx = intersect_row * n + (c0 + dc);
-                    if (st.board->values[idx] == 0) {
+        // Testujemy każdy przecinający rząd jako punkt intersekcji SDC
+        for (int i = 0; i < row_cnt; ++i) {
+            const int r = rows[i];
+
+            int a_cells[64]{};
+            int a_cnt = 0;
+            uint64_t ma = 0ULL;
+            int c_pool[64]{};
+            int c_pool_cnt = 0;
+
+            // Zbiór A (Część wspólna) i Zbiór C (Tylko Blok)
+            for (int p = box_p0; p < box_p1; ++p) {
+                const int idx = st.topo->houses_flat[p];
+                if (st.board->values[idx] == 0) {
+                    if (st.topo->cell_row[idx] == r) {
                         a_cells[a_cnt++] = idx;
                         ma |= st.cands[idx];
+                    } else {
+                        c_pool[c_pool_cnt++] = idx;
                     }
                 }
-                if (a_cnt < 2) continue;
+            }
+            if (a_cnt < 2) continue; // SDC wymaga min 2 komórek intersekcji
 
-                int b_pool[64]{};
-                int b_pool_cnt = 0;
-                for (int c = 0; c < n; ++c) {
-                    if (c >= c0 && c < c0 + st.topo->box_cols) continue;
-                    const int idx = intersect_row * n + c;
-                    if (st.board->values[idx] == 0) {
-                        b_pool[b_pool_cnt++] = idx;
-                    }
+            int b_pool[64]{};
+            int b_pool_cnt = 0;
+            const int row_p0 = st.topo->house_offsets[r];
+            const int row_p1 = st.topo->house_offsets[r + 1];
+
+            // Zbiór B (Tylko Rząd)
+            for (int p = row_p0; p < row_p1; ++p) {
+                const int idx = st.topo->houses_flat[p];
+                if (st.board->values[idx] == 0 && st.topo->cell_box[idx] != b) {
+                    b_pool[b_pool_cnt++] = idx;
                 }
+            }
 
-                int c_pool[64]{};
-                int c_pool_cnt = 0;
-                for (int b_dr = 0; b_dr < st.topo->box_rows; ++b_dr) {
-                    if (b_dr == dr) continue;
-                    for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
-                        const int idx = (r0 + b_dr) * n + (c0 + b_dc);
-                        if (st.board->values[idx] == 0) {
-                            c_pool[c_pool_cnt++] = idx;
-                        }
-                    }
-                }
+            const int select_cap = sue_de_coq_selection_cap(st);
+            const int b_limit = std::min(b_pool_cnt, select_cap);
+            const int c_limit = std::min(c_pool_cnt, select_cap);
+            if (b_limit <= 0 || c_limit <= 0) continue;
 
-                const int select_cap = sue_de_coq_selection_cap(st);
-                const int b_limit = std::min(b_pool_cnt, select_cap);
-                const int c_limit = std::min(c_pool_cnt, select_cap);
-                if (b_limit <= 0 || c_limit <= 0) continue;
+            for (int b_choose = 1; b_choose <= b_limit; ++b_choose) {
+                for (int c_choose = 1; c_choose <= c_limit; ++c_choose) {
+                    const int target_cands = a_cnt + b_choose + c_choose;
+                    if (std::popcount(ma) > target_cands) continue;
 
-                for (int b_choose = 1; b_choose <= b_limit; ++b_choose) {
-                    for (int c_choose = 1; c_choose <= c_limit; ++c_choose) {
-                        const int target_cands = a_cnt + b_choose + c_choose;
-                        if (std::popcount(ma) > target_cands) continue;
+                    for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
+                        if (contradiction) return;
+                        const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
+                        const uint64_t row_union = ma | mb;
+                        if (std::popcount(row_union) != (a_cnt + b_choose)) return;
 
-                        for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
+                        for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
                             if (contradiction) return;
-                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
-                            const uint64_t row_union = ma | mb;
-                            if (std::popcount(row_union) != (a_cnt + b_choose)) return;
+                            const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
+                            const uint64_t box_union = ma | mc;
+                            if (std::popcount(box_union) != (a_cnt + c_choose)) return;
 
-                            for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
-                                if (contradiction) return;
-                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
-                                const uint64_t box_union = ma | mc;
-                                if (std::popcount(box_union) != (a_cnt + c_choose)) return;
+                            const uint64_t union_mask = row_union | mc;
+                            if (std::popcount(union_mask) != target_cands) return;
+                            
+                            const uint64_t row_only = row_union & ~box_union;
+                            const uint64_t box_only = box_union & ~row_union;
+                            
+                            // Ścisła walidacja Sue de Coq: Cyfry wykluczone muszą być stricte odseparowane
+                            if (row_only == 0ULL || box_only == 0ULL) return;
 
-                                const uint64_t union_mask = row_union | mc;
-                                if (std::popcount(union_mask) != target_cands) return;
-                                const uint64_t row_only = row_union & ~box_union;
-                                const uint64_t box_only = box_union & ~row_union;
-                                if (row_only == 0ULL || box_only == 0ULL) return;
-
-                                if (row_union != 0ULL) {
-                                    for (int c = 0; c < n; ++c) {
-                                        if (c >= c0 && c < c0 + st.topo->box_cols) continue;
-                                        const int idx = intersect_row * n + c;
-                                        if (st.board->values[idx] != 0) continue;
-                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue;
-                                        
-                                        const ApplyResult er = st.eliminate(idx, row_union);
-                                        if (er == ApplyResult::Contradiction) {
-                                            contradiction = true;
-                                            return;
-                                        }
-                                        progress = progress || (er == ApplyResult::Progress);
+                            // Eliminacja w domenie Rzędu (Tylko część wspólna Rzędu - poza zbiorem A i B)
+                            if (row_union != 0ULL) {
+                                for (int p = row_p0; p < row_p1; ++p) {
+                                    const int idx = st.topo->houses_flat[p];
+                                    if (st.board->values[idx] != 0) continue;
+                                    if (st.topo->cell_box[idx] == b) continue; // Węzeł A
+                                    if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue; // Węzeł B
+                                    
+                                    const ApplyResult er = st.eliminate(idx, row_union);
+                                    if (er == ApplyResult::Contradiction) {
+                                        contradiction = true;
+                                        return;
                                     }
+                                    progress = progress || (er == ApplyResult::Progress);
                                 }
+                            }
 
-                                if (box_union != 0ULL) {
-                                    for (int b_dr = 0; b_dr < st.topo->box_rows; ++b_dr) {
-                                        if (b_dr == dr) continue;
-                                        for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
-                                            const int idx = (r0 + b_dr) * n + (c0 + b_dc);
-                                            if (st.board->values[idx] != 0) continue;
-                                            if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue;
-                                            
-                                            const ApplyResult er = st.eliminate(idx, box_union);
-                                            if (er == ApplyResult::Contradiction) {
-                                                contradiction = true;
-                                                return;
-                                            }
-                                            progress = progress || (er == ApplyResult::Progress);
-                                        }
+                            // Eliminacja w domenie Bloku (Tylko część wspólna Bloku - poza zbiorem A i C)
+                            if (box_union != 0ULL) {
+                                for (int p = box_p0; p < box_p1; ++p) {
+                                    const int idx = st.topo->houses_flat[p];
+                                    if (st.board->values[idx] != 0) continue;
+                                    if (st.topo->cell_row[idx] == r) continue; // Węzeł A
+                                    if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue; // Węzeł C
+                                    
+                                    const ApplyResult er = st.eliminate(idx, box_union);
+                                    if (er == ApplyResult::Contradiction) {
+                                        contradiction = true;
+                                        return;
                                     }
+                                    progress = progress || (er == ApplyResult::Progress);
                                 }
-                            });
+                            }
                         });
-                        if (contradiction) return ApplyResult::Contradiction;
-                    }
+                    });
+                    if (contradiction) return ApplyResult::Contradiction;
                 }
             }
         }
@@ -221,117 +237,134 @@ inline ApplyResult scan_row_box_intersections(CandidateState& st, bool& progress
     return ApplyResult::NoProgress;
 }
 
+// ----------------------------------------------------------------------------
+// SCAN COL-BOX INTERSECTIONS
+// ----------------------------------------------------------------------------
 inline ApplyResult scan_col_box_intersections(CandidateState& st, bool& progress, StrategyStats& s, uint64_t t0) {
     const int n = st.topo->n;
     bool contradiction = false;
 
-    for (int brg = 0; brg < st.topo->box_rows_count; ++brg) {
-        for (int bcg = 0; bcg < st.topo->box_cols_count; ++bcg) {
-            const int r0 = brg * st.topo->box_rows;
-            const int c0 = bcg * st.topo->box_cols;
+    // Przeszukujemy każdy blok na planszy
+    for (int b = 0; b < n; ++b) {
+        int cols[64];
+        int col_cnt = 0;
+        const int box_p0 = st.topo->house_offsets[2 * n + b];
+        const int box_p1 = st.topo->house_offsets[2 * n + b + 1];
 
-            for (int dc = 0; dc < st.topo->box_cols; ++dc) {
-                const int intersect_col = c0 + dc;
+        // Wyznaczamy wszystkie kolumny przecinające ten blok (zabezpieczenie asymetrii)
+        for (int p = box_p0; p < box_p1; ++p) {
+            const int c = st.topo->cell_col[st.topo->houses_flat[p]];
+            bool found = false;
+            for (int i = 0; i < col_cnt; ++i) {
+                if (cols[i] == c) { found = true; break; }
+            }
+            if (!found) cols[col_cnt++] = c;
+        }
 
-                int a_cells[64]{};
-                int a_cnt = 0;
-                uint64_t ma = 0ULL;
-                for (int dr = 0; dr < st.topo->box_rows; ++dr) {
-                    const int idx = (r0 + dr) * n + intersect_col;
-                    if (st.board->values[idx] == 0) {
+        // Testujemy każdą przecinającą kolumnę jako punkt intersekcji SDC
+        for (int i = 0; i < col_cnt; ++i) {
+            const int c = cols[i];
+
+            int a_cells[64]{};
+            int a_cnt = 0;
+            uint64_t ma = 0ULL;
+            int c_pool[64]{};
+            int c_pool_cnt = 0;
+
+            // Zbiór A (Część wspólna) i Zbiór C (Tylko Blok)
+            for (int p = box_p0; p < box_p1; ++p) {
+                const int idx = st.topo->houses_flat[p];
+                if (st.board->values[idx] == 0) {
+                    if (st.topo->cell_col[idx] == c) {
                         a_cells[a_cnt++] = idx;
                         ma |= st.cands[idx];
+                    } else {
+                        c_pool[c_pool_cnt++] = idx;
                     }
                 }
-                if (a_cnt < 2) continue;
+            }
+            if (a_cnt < 2) continue; // SDC wymaga min 2 komórek intersekcji
 
-                int b_pool[64]{};
-                int b_pool_cnt = 0;
-                for (int r = 0; r < n; ++r) {
-                    if (r >= r0 && r < r0 + st.topo->box_rows) continue;
-                    const int idx = r * n + intersect_col;
-                    if (st.board->values[idx] == 0) {
-                        b_pool[b_pool_cnt++] = idx;
-                    }
+            int b_pool[64]{};
+            int b_pool_cnt = 0;
+            const int col_p0 = st.topo->house_offsets[n + c]; // Offsets dla kolumn zaczynają się od 'n'
+            const int col_p1 = st.topo->house_offsets[n + c + 1];
+
+            // Zbiór B (Tylko Kolumna)
+            for (int p = col_p0; p < col_p1; ++p) {
+                const int idx = st.topo->houses_flat[p];
+                if (st.board->values[idx] == 0 && st.topo->cell_box[idx] != b) {
+                    b_pool[b_pool_cnt++] = idx;
                 }
+            }
 
-                int c_pool[64]{};
-                int c_pool_cnt = 0;
-                for (int b_dr = 0; b_dr < st.topo->box_rows; ++b_dr) {
-                    for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
-                        if (b_dc == dc) continue;
-                        const int idx = (r0 + b_dr) * n + (c0 + b_dc);
-                        if (st.board->values[idx] == 0) {
-                            c_pool[c_pool_cnt++] = idx;
-                        }
-                    }
-                }
+            const int select_cap = sue_de_coq_selection_cap(st);
+            const int b_limit = std::min(b_pool_cnt, select_cap);
+            const int c_limit = std::min(c_pool_cnt, select_cap);
+            if (b_limit <= 0 || c_limit <= 0) continue;
 
-                const int select_cap = sue_de_coq_selection_cap(st);
-                const int b_limit = std::min(b_pool_cnt, select_cap);
-                const int c_limit = std::min(c_pool_cnt, select_cap);
-                if (b_limit <= 0 || c_limit <= 0) continue;
+            for (int b_choose = 1; b_choose <= b_limit; ++b_choose) {
+                for (int c_choose = 1; c_choose <= c_limit; ++c_choose) {
+                    const int target_cands = a_cnt + b_choose + c_choose;
+                    if (std::popcount(ma) > target_cands) continue;
 
-                for (int b_choose = 1; b_choose <= b_limit; ++b_choose) {
-                    for (int c_choose = 1; c_choose <= c_limit; ++c_choose) {
-                        const int target_cands = a_cnt + b_choose + c_choose;
-                        if (std::popcount(ma) > target_cands) continue;
+                    for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
+                        if (contradiction) return;
+                        const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
+                        const uint64_t col_union = ma | mb;
+                        if (std::popcount(col_union) != (a_cnt + b_choose)) return;
 
-                        for_each_combo_up_to5(b_pool_cnt, b_choose, [&](int bi1, int bi2, int bi3, int bi4, int bi5) {
+                        for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
                             if (contradiction) return;
-                            const uint64_t mb = pool_mask_from_selection(st, b_pool, bi1, bi2, bi3, bi4, bi5);
-                            const uint64_t col_union = ma | mb;
-                            if (std::popcount(col_union) != (a_cnt + b_choose)) return;
+                            const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
+                            const uint64_t box_union = ma | mc;
+                            if (std::popcount(box_union) != (a_cnt + c_choose)) return;
 
-                            for_each_combo_up_to5(c_pool_cnt, c_choose, [&](int ci1, int ci2, int ci3, int ci4, int ci5) {
-                                if (contradiction) return;
-                                const uint64_t mc = pool_mask_from_selection(st, c_pool, ci1, ci2, ci3, ci4, ci5);
-                                const uint64_t box_union = ma | mc;
-                                if (std::popcount(box_union) != (a_cnt + c_choose)) return;
+                            const uint64_t union_mask = col_union | mc;
+                            if (std::popcount(union_mask) != target_cands) return;
+                            
+                            const uint64_t col_only = col_union & ~box_union;
+                            const uint64_t box_only = box_union & ~col_union;
+                            
+                            // Ścisła walidacja Sue de Coq: Cyfry wykluczone muszą być stricte odseparowane
+                            if (col_only == 0ULL || box_only == 0ULL) return;
 
-                                const uint64_t union_mask = col_union | mc;
-                                if (std::popcount(union_mask) != target_cands) return;
-                                const uint64_t col_only = col_union & ~box_union;
-                                const uint64_t box_only = box_union & ~col_union;
-                                if (col_only == 0ULL || box_only == 0ULL) return;
-
-                                if (col_union != 0ULL) {
-                                    for (int r = 0; r < n; ++r) {
-                                        if (r >= r0 && r < r0 + st.topo->box_rows) continue;
-                                        const int idx = r * n + intersect_col;
-                                        if (st.board->values[idx] != 0) continue;
-                                        if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue;
-                                        
-                                        const ApplyResult er = st.eliminate(idx, col_union);
-                                        if (er == ApplyResult::Contradiction) {
-                                            contradiction = true;
-                                            return;
-                                        }
-                                        progress = progress || (er == ApplyResult::Progress);
+                            // Eliminacja w domenie Kolumny (Tylko część wspólna Kolumny - poza zbiorem A i B)
+                            if (col_union != 0ULL) {
+                                for (int p = col_p0; p < col_p1; ++p) {
+                                    const int idx = st.topo->houses_flat[p];
+                                    if (st.board->values[idx] != 0) continue;
+                                    if (st.topo->cell_box[idx] == b) continue; // Węzeł A
+                                    if (idx_equals_any_selected(idx, b_pool, bi1, bi2, bi3, bi4, bi5)) continue; // Węzeł B
+                                    
+                                    const ApplyResult er = st.eliminate(idx, col_union);
+                                    if (er == ApplyResult::Contradiction) {
+                                        contradiction = true;
+                                        return;
                                     }
+                                    progress = progress || (er == ApplyResult::Progress);
                                 }
+                            }
 
-                                if (box_union != 0ULL) {
-                                    for (int b_dr = 0; b_dr < st.topo->box_rows; ++b_dr) {
-                                        for (int b_dc = 0; b_dc < st.topo->box_cols; ++b_dc) {
-                                            if (b_dc == dc) continue;
-                                            const int idx = (r0 + b_dr) * n + (c0 + b_dc);
-                                            if (st.board->values[idx] != 0) continue;
-                                            if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue;
-                                            
-                                            const ApplyResult er = st.eliminate(idx, box_union);
-                                            if (er == ApplyResult::Contradiction) {
-                                                contradiction = true;
-                                                return;
-                                            }
-                                            progress = progress || (er == ApplyResult::Progress);
-                                        }
+                            // Eliminacja w domenie Bloku (Tylko część wspólna Bloku - poza zbiorem A i C)
+                            if (box_union != 0ULL) {
+                                for (int p = box_p0; p < box_p1; ++p) {
+                                    const int idx = st.topo->houses_flat[p];
+                                    if (st.board->values[idx] != 0) continue;
+                                    if (st.topo->cell_col[idx] == c) continue; // Węzeł A
+                                    if (idx_equals_any_selected(idx, c_pool, ci1, ci2, ci3, ci4, ci5)) continue; // Węzeł C
+                                    
+                                    const ApplyResult er = st.eliminate(idx, box_union);
+                                    if (er == ApplyResult::Contradiction) {
+                                        contradiction = true;
+                                        return;
                                     }
+                                    progress = progress || (er == ApplyResult::Progress);
                                 }
-                            });
+                            }
                         });
-                        if (contradiction) return ApplyResult::Contradiction;
-                    }
+                    });
+                    if (contradiction) return ApplyResult::Contradiction;
                 }
             }
         }
@@ -340,6 +373,9 @@ inline ApplyResult scan_col_box_intersections(CandidateState& st, bool& progress
     return ApplyResult::NoProgress;
 }
 
+// ----------------------------------------------------------------------------
+// GŁÓWNY PUNKT WEJŚCIA SUE DE COQ
+// ----------------------------------------------------------------------------
 inline ApplyResult apply_sue_de_coq(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = st.now_ns();
     ++s.use_count;
