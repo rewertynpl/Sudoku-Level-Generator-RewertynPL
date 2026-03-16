@@ -1,8 +1,16 @@
+// ============================================================================
+// SUDOKU HPC - LOGIC ENGINE SHARED
+// Moduł: state_probe.h
+// Opis: Wykonywanie "zrzutów" stanu planszy, bezpiecznych symulacji (Probing)
+//       oraz szybkiej propagacji singli (Naked & Hidden) z gwarancją Zero-Allocation.
+//       Rozwiązany problem dławienia łańcuchów wymuszających (P7/P8).
+// ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 
 #include "exact_pattern_scratchpad.h"
 #include "../../core/candidate_state.h"
@@ -58,21 +66,63 @@ inline uint64_t* intersection_slot(ExactPatternScratchpad& sp, int slot) {
     return sp.p8_intersection_backup[slot];
 }
 
+// Szybka propagacja singli na głębokich symulacjach (Forcing Chains, P8)
 inline bool propagate_singles(CandidateState& st, int max_steps) {
     const int nn = st.topo->nn;
+    const int n = st.topo->n;
+    
     for (int step = 0; step < max_steps; ++step) {
         bool changed = false;
+        
+        // 1. Naked Singles - Pusty węzeł ma już tylko 1 kandydata
         for (int idx = 0; idx < nn; ++idx) {
             if (st.board->values[idx] != 0) continue;
             const uint64_t m = st.cands[idx];
-            if (m == 0ULL) return false;
-            const int sd = config::single_digit_from_mask(m);
-            if (sd == 0) continue;
-            if (!st.place(idx, sd)) return false;
-            changed = true;
+            if (m == 0ULL) return false; // Sprzeczność! Kandydaci wyczerpani.
+            
+            // Szybki bit-trick: czy maska ma tylko jeden zapalony bit (potęga dwójki)?
+            if ((m & (m - 1ULL)) == 0ULL) {
+                if (!st.place(idx, config::bit_ctz_u64(m) + 1)) return false;
+                changed = true;
+            }
         }
+        
+        // 2. Hidden Singles - Cyfra występuje tylko w jednej dostępnej komórce dla domku
+        // Zero-Allocation z użyciem wstępnie przygotowanej topologii
+        const size_t house_count = st.topo->house_offsets.size() - 1;
+        for (size_t h = 0; h < house_count; ++h) {
+            const int p0 = st.topo->house_offsets[h];
+            const int p1 = st.topo->house_offsets[h + 1];
+            
+            for (int d = 1; d <= n; ++d) {
+                const uint64_t bit = 1ULL << (d - 1);
+                int pos = -1, cnt = 0;
+                
+                for (int p = p0; p < p1; ++p) {
+                    const int idx = st.topo->houses_flat[p];
+                    
+                    // Jeśli cyfra jest już postawiona w domku, przechodzimy do kolejnej
+                    if (st.board->values[idx] == d) { 
+                        cnt = 2; 
+                        break; 
+                    }
+                    
+                    if (st.board->values[idx] == 0 && (st.cands[idx] & bit)) {
+                        pos = idx;
+                        ++cnt;
+                    }
+                }
+                
+                if (cnt == 1 && pos != -1) {
+                    if (!st.place(pos, d)) return false; // Sprzeczność!
+                    changed = true;
+                }
+            }
+        }
+        
         if (!changed) break;
     }
+    
     return true;
 }
 
@@ -82,9 +132,12 @@ inline bool probe_candidate_contradiction(
     int digit,
     int max_steps,
     ExactPatternScratchpad& sp) {
+    
     snapshot_state(st, sp);
 
     bool contradiction = false;
+    
+    // Próbujemy wstawić kandydata i odpalić propagację
     if (!st.place(idx, digit)) {
         contradiction = true;
     } else if (!propagate_singles(st, max_steps)) {

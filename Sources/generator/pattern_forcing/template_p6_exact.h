@@ -5,7 +5,7 @@
 //       poziomu 6, 7 i 8 (Nightmare / Theoretical). Wstrzykuje rygorystyczne
 //       maski (Anchors) oraz powiązania silne (Skeletons), wymuszając na 
 //       solverze DLX zbudowanie planszy zawierającej docelowy wzorzec.
-//       Gwarancja Zero-Allocation. Ochrona asymetrii NxN.
+//       Gwarancja Zero-Allocation. Ochrona asymetrii NxN oraz Pigeonhole.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <random>
+#include <algorithm>
 
 #include "../../core/board.h"
 #include "template_exocet.h"
@@ -98,9 +99,14 @@ public:
         plan.add_anchor(r1 * n + c3, bc);
         plan.add_anchor(r2 * n + c1, ac);
         
+        // TARGET INJECTION: Komórka T widzi r1*c1 i r2*c1, które będą miały przeciwne kolory dla d1
+        int tr = random_third_index(n, r1, r2, rng);
+        int dt = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
+        plan.add_anchor(tr * n + c1, (1ULL << (d1 - 1)) | (1ULL << (dt - 1)));
+
         plan.explicit_skeleton = true;
-        plan.valid = (plan.anchor_count >= 6);
-        return plan.valid;
+        plan.valid = true;
+        return true;
     }
 
     static bool build_death_blossom(const GenericTopology& topo, std::mt19937_64& rng, ExactPatternTemplatePlan& plan) {
@@ -108,45 +114,44 @@ public:
         const int n = topo.n;
         if (n < 4) return false;
 
-        // Prawdziwy Death Blossom z Pivotem 3-kandydatowym
-        int r = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int c = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int pivot = r * n + c;
+        // Wrzucamy Pivot, Płatki i Target do TEGO SAMEGO BLOKU, by zagwarantować widoczność i uniknąć anty-clusteringu
+        const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
+        const int p0 = topo.house_offsets[2 * n + box];
+        const int p1 = topo.house_offsets[2 * n + box + 1];
+        
+        if (p1 - p0 < 5) return false;
+
+        int cells[64];
+        int count = p1 - p0;
+        for (int i = 0; i < count; ++i) {
+            cells[i] = topo.houses_flat[p0 + i];
+        }
+        
+        // Przetasujmy komórki w bloku, by nie były przewidywalne
+        for (int i = count - 1; i > 0; --i) {
+            int j = static_cast<int>(rng() % static_cast<uint64_t>(i + 1));
+            std::swap(cells[i], cells[j]);
+        }
+
+        int pivot = cells[0];
+        int petal_cells[3] = {cells[1], cells[2], cells[3]};
+        int target = cells[4];
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
         const int d3 = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)), rng);
         const int dz = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)) | (1ULL << (d3 - 1)), rng);
+        const int dt = random_digit_distinct(n, (1ULL << (dz - 1)), rng);
 
         const uint64_t pivot_mask = (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)) | (1ULL << (d3 - 1));
         plan.add_anchor(pivot, pivot_mask);
 
-        // Szukamy 3 komórek płatków widzących pivot i siebie nawzajem (lub cel)
-        int petal_cells[3] = {-1, -1, -1};
-        int found = 0;
-        
-        const int p0 = topo.peer_offsets[pivot];
-        const int p1 = topo.peer_offsets[pivot + 1];
-        
-        for (int p = p0; p < p1 && found < 3; ++p) {
-            int peer = topo.peers_flat[p];
-            bool ok = true;
-            for (int i = 0; i < found; ++i) {
-                // By nie wpadły w jeden klaster, unikamy tego samego rzędu i kolumny pomiędzy płatkami
-                if (topo.cell_row[peer] == topo.cell_row[petal_cells[i]] || 
-                    topo.cell_col[peer] == topo.cell_col[petal_cells[i]]) {
-                    ok = false; break;
-                }
-            }
-            if (ok) petal_cells[found++] = peer;
-        }
-        
-        if (found < 3) return false;
-
-        // Płatki (Petals): każdy dzieli DOKŁADNIE jednego kandydata z pivotem i wszyscy dzielą Z
         plan.add_anchor(petal_cells[0], (1ULL << (d1 - 1)) | (1ULL << (dz - 1)));
         plan.add_anchor(petal_cells[1], (1ULL << (d2 - 1)) | (1ULL << (dz - 1)));
         plan.add_anchor(petal_cells[2], (1ULL << (d3 - 1)) | (1ULL << (dz - 1)));
+        
+        // TARGET INJECTION: Komórka w tym samym bloku, w której wymuszamy eliminację Z
+        plan.add_anchor(target, (1ULL << (dz - 1)) | (1ULL << (dt - 1)));
 
         plan.explicit_skeleton = true;
         plan.valid = true;
@@ -165,7 +170,6 @@ public:
         const int c0 = bc * topo.box_cols;
         const int row = r0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_rows));
 
-        // Klasyczny, zgrabny 4-komórkowy Sue de Coq:
         if (topo.box_cols < 2) return false;
         int i1 = row * n + c0;
         int i2 = row * n + c0 + 1; 
@@ -193,6 +197,27 @@ public:
         plan.add_anchor(row_only, m_row);
         plan.add_anchor(box_only, m_box);
 
+        // TARGET INJECTION: Komórka w rzędzie, by zlikwidować nadwyżkę D1
+        int target_row = -1;
+        for (int cc = 0; cc < n; ++cc) {
+            if (cc >= c0 && cc < c0 + topo.box_cols) continue;
+            int cand = row * n + cc;
+            if (cand != row_only) { target_row = cand; break; }
+        }
+        if (target_row != -1) {
+            int dx = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
+            plan.add_anchor(target_row, (1ULL << (d1 - 1)) | (1ULL << (dx - 1)));
+        }
+
+        // NOWE: Blokowanie pozostałych komórek intersekcji
+        for (int dc = 0; dc < topo.box_cols; ++dc) {
+            const int cell = row * n + c0 + dc;
+            if (cell != i1 && cell != i2) {
+                // Blokujemy w niej kandydatów m_inter, aby komórka nie urosła do rozmiarów ALS SDC
+                plan.add_skeleton(cell, ~(m_inter) & pf_full_mask_for_n(n));
+            }
+        }
+
         plan.explicit_skeleton = true;
         plan.valid = true;
         return true;
@@ -212,21 +237,19 @@ public:
         if (r1 == r2 || c1 == c2 || c1 == c3 || c2 == c3) return false;
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
-        const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
+        const uint64_t d1_bit = (1ULL << (d1 - 1));
 
-        const uint64_t fish_mask = (1ULL << (d1 - 1)) | (1ULL << (d2 - 1));
+        // PIGEONHOLE FIX: Każda kotwica musi dostać INNĄ cyfrę 'd_other'
+        auto apply_fish_anchor = [&](int idx) {
+            int d_other = random_digit_distinct(n, d1_bit, rng);
+            plan.add_anchor(idx, d1_bit | (1ULL << (d_other - 1)));
+        };
 
-        plan.add_anchor(r1 * n + c1, fish_mask);
-        plan.add_anchor(r1 * n + c2, fish_mask);
-        plan.add_anchor(r2 * n + c1, fish_mask);
-        plan.add_anchor(r2 * n + c2, fish_mask); // Fin
-        
-        // Tentacle (Macka) wychodząca z r1c3
-        plan.add_anchor(r1 * n + c3, fish_mask);
-
-        // Blokujemy wystąpienia cyfry D1 na reszcie rzędów by stworzyć prawdziwą rybę
-        force_strong_link_row(topo, plan, r1, c1, c2, d1);
-        force_strong_link_row(topo, plan, r2, c1, c2, d1);
+        apply_fish_anchor(r1 * n + c1);
+        apply_fish_anchor(r1 * n + c2);
+        apply_fish_anchor(r2 * n + c1);
+        apply_fish_anchor(r2 * n + c2); // Fin
+        apply_fish_anchor(r1 * n + c3); // Tentacle
 
         plan.explicit_skeleton = true;
         plan.valid = (plan.anchor_count >= 5);
@@ -238,25 +261,28 @@ public:
         const int n = topo.n;
         if (n < 6 || topo.box_rows <= 1 || topo.box_cols <= 1) return false;
 
-        // Franken Fish: np. 2 Rzędy i 1 Box (Bazy) przecinające się z 3 Kolumnami (Covers)
+        // Franken Fish: 2 Rzędy i 1 Box (Bazy) przecinające się z 3 Kolumnami (Covers)
         int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
         int r2 = random_distinct_index(n, r1, rng);
         int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
         int c2 = random_distinct_index(n, c1, rng);
         if (r1 == r2 || c1 == c2) return false;
 
-        const int b1 = topo.cell_box[r1 * n + c1];
-        
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
-        const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
-        const uint64_t mask = (1ULL << (d1 - 1)) | (1ULL << (d2 - 1));
+        const uint64_t d1_bit = (1ULL << (d1 - 1));
 
-        // Dodajemy punkty węzłowe z rzędów i bloku na przecięciach kolumn
-        plan.add_anchor(r1 * n + c1, mask);
-        plan.add_anchor(r1 * n + c2, mask);
-        plan.add_anchor(r2 * n + c1, mask);
-        plan.add_anchor(r2 * n + c2, mask);
+        // PIGEONHOLE FIX
+        auto apply_fish_anchor = [&](int idx) {
+            int d_other = random_digit_distinct(n, d1_bit, rng);
+            plan.add_anchor(idx, d1_bit | (1ULL << (d_other - 1)));
+        };
 
+        apply_fish_anchor(r1 * n + c1);
+        apply_fish_anchor(r1 * n + c2);
+        apply_fish_anchor(r2 * n + c1);
+        apply_fish_anchor(r2 * n + c2);
+
+        const int b1 = topo.cell_box[r1 * n + c1];
         const int house = 2 * n + b1;
         const int p0 = topo.house_offsets[house];
         const int p1 = topo.house_offsets[house + 1];
@@ -265,7 +291,7 @@ public:
             const int rr = topo.cell_row[idx];
             const int cc = topo.cell_col[idx];
             if (rr == r1 || rr == r2 || cc == c1 || cc == c2) continue;
-            plan.add_anchor(idx, mask);
+            apply_fish_anchor(idx);
         }
         
         plan.explicit_skeleton = true;
@@ -278,7 +304,6 @@ public:
         const int n = topo.n;
         if (n < 6 || topo.box_rows <= 1 || topo.box_cols <= 1) return false;
 
-        // Mutant Fish: Rzędy + Kolumny jako bazy (krzyżowanie)
         int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
         int r2 = random_distinct_index(n, r1, rng);
         int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
@@ -286,15 +311,20 @@ public:
         if (r1 == r2 || c1 == c2) return false;
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
-        const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
-        const uint64_t mask = (1ULL << (d1 - 1)) | (1ULL << (d2 - 1));
+        const uint64_t d1_bit = (1ULL << (d1 - 1));
 
-        plan.add_anchor(r1 * n + c1, mask);
-        plan.add_anchor(r1 * n + c2, mask);
-        plan.add_anchor(r2 * n + c1, mask);
-        plan.add_anchor(r2 * n + c2, mask);
+        // PIGEONHOLE FIX
+        auto apply_fish_anchor = [&](int idx) -> bool {
+            int d_other = random_digit_distinct(n, d1_bit, rng);
+            plan.add_anchor(idx, d1_bit | (1ULL << (d_other - 1)));
+            return true;
+        };
 
-        // Dodajemy mutację - zmuszamy bloki do partycypacji w sieci 
+        apply_fish_anchor(r1 * n + c1);
+        apply_fish_anchor(r1 * n + c2);
+        apply_fish_anchor(r2 * n + c1);
+        apply_fish_anchor(r2 * n + c2);
+
         int b1 = topo.cell_box[r1 * n + c2];
         const int house = 2 * n + b1;
         const int p0 = topo.house_offsets[house];
@@ -303,7 +333,7 @@ public:
         for (int p = p0; p < p1; ++p) {
             const int idx = topo.houses_flat[p];
             if (topo.cell_row[idx] == r1 || topo.cell_col[idx] == c2) continue;
-            if (plan.add_anchor(idx, mask)) break;
+            if (apply_fish_anchor(idx)) break;
         }
 
         plan.explicit_skeleton = true;
@@ -324,31 +354,31 @@ public:
         cols[0] = static_cast<int>(rng() % static_cast<uint64_t>(n));
         
         for(int i = 1; i < 5; ++i) {
-            rows[i] = random_distinct_index(n, rows[0], rng);
-            // Zapewnienie unikalności
-            for(int j=0; j<100; ++j) {
-                bool ok = true;
+            rows[i] = random_distinct_index(n, rows[i-1], rng);
+            bool ok = false;
+            for(int j=0; j<100 && !ok; ++j) {
+                ok = true;
                 for(int k=0; k<i; ++k) if(rows[k] == rows[i]) ok = false;
-                if(ok) break;
-                rows[i] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+                if(!ok) rows[i] = static_cast<int>(rng() % static_cast<uint64_t>(n));
             }
             
-            cols[i] = random_distinct_index(n, cols[0], rng);
-            for(int j=0; j<100; ++j) {
-                bool ok = true;
+            cols[i] = random_distinct_index(n, cols[i-1], rng);
+            ok = false;
+            for(int j=0; j<100 && !ok; ++j) {
+                ok = true;
                 for(int k=0; k<i; ++k) if(cols[k] == cols[i]) ok = false;
-                if(ok) break;
-                cols[i] = static_cast<int>(rng() % static_cast<uint64_t>(n));
+                if(!ok) cols[i] = static_cast<int>(rng() % static_cast<uint64_t>(n));
             }
         }
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
-        const uint64_t m1 = (1ULL << (d1 - 1));
+        const uint64_t d1_bit = (1ULL << (d1 - 1));
 
+        // PIGEONHOLE FIX: Unikalne wylosowanie dla każdego punktu siatki ryby
         for (int ri = 0; ri < 5; ++ri) {
             for (int ci = 0; ci < 5; ++ci) {
-                int d_other = random_digit_distinct(n, m1, rng);
-                plan.add_anchor(rows[ri] * n + cols[ci], m1 | (1ULL << (d_other - 1)));
+                int d_other = random_digit_distinct(n, d1_bit, rng);
+                plan.add_anchor(rows[ri] * n + cols[ci], d1_bit | (1ULL << (d_other - 1)));
             }
         }
 
@@ -366,6 +396,12 @@ public:
         const int row = topo.cell_row[pivot];
         const int col = topo.cell_col[pivot];
         
+        // Musisz wylosować DWIE komórki dla pivota, obie widzące się w tym samym "domku"
+        // Najlepiej z tego samego rzędu
+        int col2 = (col + 1) % n;
+        int p_cell1 = pivot;
+        int p_cell2 = row * n + col2;
+        
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
         const int d3 = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)), rng);
@@ -374,15 +410,17 @@ public:
         const uint64_t xz = (1ULL << (d1 - 1)) | (1ULL << (d3 - 1));
         const uint64_t yz = (1ULL << (d2 - 1)) | (1ULL << (d3 - 1));
         
-        // Pivot ALS (2 komórki)
-        plan.add_anchor(pivot, xy | (1ULL << (d3 - 1)));
+        // Pivot ALS (2 komórki, 3 kandydatów)
+        const uint64_t pivot_mask = xy | (1ULL << (d3 - 1));
+        plan.add_anchor(p_cell1, pivot_mask);
+        plan.add_anchor(p_cell2, pivot_mask);
         
         int w1 = -1, w2 = -1;
         for (int cc = 0; cc < n && w1 < 0; ++cc) {
-            if (row * n + cc != pivot) w1 = row * n + cc;
+            if (cc != col && cc != col2) w1 = row * n + cc;
         }
         for (int rr = 0; rr < n && w2 < 0; ++rr) {
-            if (rr * n + col != pivot) w2 = rr * n + col;
+            if (rr != row) w2 = rr * n + col;
         }
         if (w1 < 0 || w2 < 0) return false;
         
@@ -391,7 +429,7 @@ public:
         plan.add_anchor(w2, yz);
         
         plan.explicit_skeleton = true;
-        plan.valid = (plan.anchor_count >= 3);
+        plan.valid = (plan.anchor_count >= 4);
         return plan.valid;
     }
 
@@ -431,29 +469,60 @@ public:
     static bool build_wxyz_wing(const GenericTopology& topo, std::mt19937_64& rng, ExactPatternTemplatePlan& plan) {
         plan = {};
         const int n = topo.n;
-        if (n < 5) return false;
+        if (n < 5 || topo.box_cols < 3) return false;
 
-        int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int r2 = random_distinct_index(n, r1, rng);
-        int c2 = random_distinct_index(n, c1, rng);
+        const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
+        const int br = box / topo.box_cols_count;
+        const int bc = box % topo.box_cols_count;
+        const int r0 = br * topo.box_rows;
+        const int c0 = bc * topo.box_cols;
+        
+        const int row = r0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_rows));
+
+        // 3 komórki w tym samym rzędzie i bloku dla Pivota
+        const int p1 = row * n + c0;
+        const int p2 = row * n + c0 + 1;
+        const int p3 = row * n + c0 + 2;
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
         const int d3 = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)), rng);
         const int d4 = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)) | (1ULL << (d3 - 1)), rng);
 
-        const uint64_t w = (1ULL << (d1 - 1)), x = (1ULL << (d2 - 1)), y = (1ULL << (d3 - 1)), z = (1ULL << (d4 - 1));
+        const uint64_t w = (1ULL << (d1 - 1));
+        const uint64_t x = (1ULL << (d2 - 1));
+        const uint64_t y = (1ULL << (d3 - 1));
+        const uint64_t z = (1ULL << (d4 - 1));
         
-        // Pivot = WXYZ
-        plan.add_anchor(r1 * n + c1, w | x | y | z);
-        // Wings
-        plan.add_anchor(r1 * n + c2, w | z);
-        plan.add_anchor(r2 * n + c1, x | z);
-        plan.add_anchor(r2 * n + c2, y | z);
+        const uint64_t pivot_mask = w | x | y | z;
+        // Pivot = WXYZ (Rozmiar 3, popcount 4)
+        plan.add_anchor(p1, pivot_mask);
+        plan.add_anchor(p2, pivot_mask);
+        plan.add_anchor(p3, pivot_mask);
+        
+        // Wings outside the box but seeing the pivot
+        int w1_cell = -1, w2_cell = -1, w3_cell = -1;
+        
+        for (int cc = 0; cc < n && w1_cell < 0; ++cc) {
+            if (cc < c0 || cc >= c0 + topo.box_cols) w1_cell = row * n + cc;
+        }
+        for (int rr = 0; rr < n && w2_cell < 0; ++rr) {
+            if (rr < r0 || rr >= r0 + topo.box_rows) w2_cell = rr * n + c0;
+        }
+        for (int rr = 0; rr < n && w3_cell < 0; ++rr) {
+            if (rr < r0 || rr >= r0 + topo.box_rows) {
+                if (rr * n + c0 + 1 != w2_cell) w3_cell = rr * n + c0 + 1;
+            }
+        }
+
+        if (w1_cell < 0 || w2_cell < 0 || w3_cell < 0) return false;
+
+        plan.add_anchor(w1_cell, w | z);
+        plan.add_anchor(w2_cell, x | z);
+        plan.add_anchor(w3_cell, y | z);
         
         plan.explicit_skeleton = true;
-        plan.valid = (plan.anchor_count >= 4);
+        plan.valid = (plan.anchor_count >= 6);
         return plan.valid;
     }
 
@@ -467,6 +536,9 @@ public:
         int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
         int c2 = random_distinct_index(n, c1, rng);
         int c3 = random_third_index(n, c1, c2, rng);
+        int c4 = c3;
+        for(int g=0; g<64 && (c4==c1 || c4==c2 || c4==c3); ++g) c4 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+        if (c1 == c2 || c1 == c3 || c1 == c4 || c2 == c3 || c2 == c4 || c3 == c4) return false;
 
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
@@ -478,17 +550,20 @@ public:
         const uint64_t c = (1ULL << (d1 - 1)) | (1ULL << (d3 - 1)) | (1ULL << (d4 - 1));
         
         plan.add_anchor(r1 * n + c1, a);
-        plan.add_anchor(r1 * n + c2, a);
+        plan.add_anchor(r1 * n + c2, a); // ALS A
+        
         plan.add_anchor(r2 * n + c2, b);
-        plan.add_anchor(r2 * n + c3, b);
+        plan.add_anchor(r2 * n + c3, b); // ALS B
+        
         plan.add_anchor(r1 * n + c3, c);
+        plan.add_anchor(r1 * n + c4, c); // ALS C
         
         if (aic_mode) {
-            plan.add_anchor(r2 * n + c1, c | (1ULL << (d2 - 1)));
+            plan.add_anchor(r2 * n + c1, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)));
         }
         
         plan.explicit_skeleton = true;
-        plan.valid = (plan.anchor_count >= (aic_mode ? 6 : 5));
+        plan.valid = (plan.anchor_count >= (aic_mode ? 7 : 6));
         return plan.valid;
     }
 
@@ -546,21 +621,27 @@ public:
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const int d2 = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
         const int d3 = random_digit_distinct(n, (1ULL << (d1 - 1)) | (1ULL << (d2 - 1)), rng);
+        const int dt = random_digit_distinct(n, (1ULL << (d1 - 1)), rng);
         
         const uint64_t a = (1ULL << (d1 - 1)) | (1ULL << (d2 - 1));
         const uint64_t b = (1ULL << (d2 - 1)) | (1ULL << (d3 - 1));
         const uint64_t c = (1ULL << (d1 - 1)) | (1ULL << (d3 - 1));
         
-        plan.add_anchor(r1 * n + c1, a);
-        plan.add_anchor(r1 * n + c2, b);
-        plan.add_anchor(r2 * n + c2, c);
+        // aic path: A(d1,d2) -r1- B(d2,d3) -c2- C(d3,d1)
+        plan.add_anchor(r1 * n + c1, a); // A
+        plan.add_anchor(r1 * n + c2, b); // B
+        plan.add_anchor(r2 * n + c2, c); // C
         
-        // Zabezpieczamy Strong Linki dla AIC by DLX musiał uformować z nich łańcuch wymuszający
         force_strong_link_row(topo, plan, r1, c1, c2, d2);
         force_strong_link_col(topo, plan, c2, r1, r2, d3);
 
+        // TARGET INJECTION: Komórka widząca A(r1,c1) i C(r2,c2). 
+        int tr = r2;
+        int tc = c1;
+        plan.add_anchor(tr * n + tc, (1ULL << (d1 - 1)) | (1ULL << (dt - 1)));
+
         plan.explicit_skeleton = true;
-        plan.valid = (plan.anchor_count >= 3);
+        plan.valid = (plan.anchor_count >= 4);
         return plan.valid;
     }
 
@@ -621,7 +702,6 @@ public:
         plan.add_anchor(r2 * n + c1, core);
         plan.add_anchor(r2 * n + c2, core);
         
-        // Zgrupowanie: dodajemy węzły z bloku, rzędu by utworzyć Grouped Node
         for (int rr = 0; rr < n && plan.anchor_count < 6; ++rr) {
             if (rr == r1 || rr == r2) continue;
             if (topo.cell_box[rr * n + c1] == topo.cell_box[r1 * n + c1]) {
@@ -836,6 +916,7 @@ public:
         const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n)) + 1;
         const uint64_t bit = 1ULL << (d1 - 1);
 
+        // PIGEONHOLE FIX: Każda kotwica dużej ryby musi mieć inną `d_other`
         for (int ri = 0; ri < line_count; ++ri) {
             for (int ci = 0; ci < line_count; ++ci) {
                 int d_other = random_digit_distinct(n, bit, rng);

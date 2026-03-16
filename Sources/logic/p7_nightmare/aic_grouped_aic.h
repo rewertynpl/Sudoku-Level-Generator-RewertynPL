@@ -3,9 +3,9 @@
 // Module: aic_grouped_aic.h (Level 7 - Nightmare)
 // Description: Direct Alternating Inference Chains (AIC) and Grouped AIC
 // on strong/weak candidate graphs per digit, zero-allocation.
+// Zaktualizowano o poprawne wsparcie dla Węzłów Grupowych (Grouped Nodes).
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
-
 
 #pragma once
 
@@ -59,29 +59,62 @@ inline int aic_collect_neighbors(
     return cnt;
 }
 
+// Eliminacja kandydatów widzących łącznie dwa podane węzły. 
+// W przypadku węzłów grupowych (Grouped Nodes), komórka musi widzieć WSZYSTKIE komórki z każdego węzła.
 inline ApplyResult aic_eliminate_common_peers(
     CandidateState& st,
     const shared::ExactPatternScratchpad& sp,
     uint64_t bit,
-    int a_cell,
-    int b_cell) {
+    int a_node,
+    int b_node) {
+    
     for (int i = 0; i < sp.dyn_digit_cell_count; ++i) {
         const int idx = sp.dyn_digit_cells[i];
-        if (idx == a_cell || idx == b_cell) continue;
-        if (!st.is_peer(idx, a_cell) || !st.is_peer(idx, b_cell)) continue;
+        
+        // Nie eliminujemy kandydatów, którzy są częścią samych węzłów krańcowych
+        bool in_a = false, in_b = false;
+        for (int p = sp.adj_offsets[a_node]; p < sp.adj_offsets[a_node + 1]; ++p) {
+            if (sp.adj_flat[p] == idx) { in_a = true; break; }
+        }
+        if (in_a) continue;
+        
+        for (int p = sp.adj_offsets[b_node]; p < sp.adj_offsets[b_node + 1]; ++p) {
+            if (sp.adj_flat[p] == idx) { in_b = true; break; }
+        }
+        if (in_b) continue;
+
+        // Komórka docelowa (Target) musi widzieć każdy element grupy A i każdy element grupy B
+        if (!shared::node_sees_cell(st, sp, a_node, idx)) continue;
+        if (!shared::node_sees_cell(st, sp, b_node, idx)) continue;
+        
         const ApplyResult er = st.eliminate(idx, bit);
         if (er != ApplyResult::NoProgress) return er;
     }
     return ApplyResult::NoProgress;
 }
 
+// Eliminacja kandydata z konkretnego węzła startowego. W przypadku węzłów grupowych, 
+// eliminacja zostaje zaaplikowana na wszystkie komórki wchodzące w skład tego węzła.
 inline ApplyResult aic_eliminate_start_candidate(
     CandidateState& st,
+    const shared::ExactPatternScratchpad& sp,
     uint64_t bit,
-    int start_cell) {
-    return st.eliminate(start_cell, bit);
+    int start_node) {
+    
+    ApplyResult final_res = ApplyResult::NoProgress;
+    const int p0 = sp.adj_offsets[start_node];
+    const int p1 = sp.adj_offsets[start_node + 1];
+    
+    for (int p = p0; p < p1; ++p) {
+        const int cell = sp.adj_flat[p];
+        const ApplyResult er = st.eliminate(cell, bit);
+        if (er == ApplyResult::Contradiction) return er;
+        if (er == ApplyResult::Progress) final_res = ApplyResult::Progress;
+    }
+    return final_res;
 }
 
+// Główny rdzeń przeszukiwania naprzemiennego łańcucha (AIC i Grouped AIC).
 inline ApplyResult alternating_chain_core(
     CandidateState& st,
     int depth_cap,
@@ -102,8 +135,12 @@ inline ApplyResult alternating_chain_core(
         if (sp.dyn_node_count < 4 || sp.dyn_strong_edge_count == 0) continue;
 
         for (int start = 0; start < sp.dyn_node_count; ++start) {
-            const int start_cell = sp.dyn_node_to_cell[start];
-            if (st.board->values[start_cell] != 0) continue;
+            // Pomijamy węzeł, jeśli któraś z jego komórek została już wyznaczona (rozwiązana)
+            bool any_solved = false;
+            for (int p = sp.adj_offsets[start]; p < sp.adj_offsets[start + 1]; ++p) {
+                if (st.board->values[sp.adj_flat[p]] != 0) { any_solved = true; break; }
+            }
+            if (any_solved) continue;
 
             for (int first_type = 1; first_type >= 0; --first_type) {
                 if (first_type == 0 && !allow_weak_start) continue;
@@ -142,8 +179,11 @@ inline ApplyResult alternating_chain_core(
 
                         int* const vis = (next_type == 0) ? vis_even : vis_odd;
                         int* const vis_other = (next_type == 0) ? vis_odd : vis_even;
+                        
+                        // Zjawisko sprzeczności parzystości w łańcuchu dla tego samego węzła.
+                        // Oznacza, że założenie o węźle startowym było z gruntu błędne.
                         if (vis_other[v] != 0) {
-                            const ApplyResult er = aic_eliminate_start_candidate(st, bit, start_cell);
+                            const ApplyResult er = aic_eliminate_start_candidate(st, sp, bit, start);
                             if (er == ApplyResult::Contradiction) return er;
                             if (er == ApplyResult::Progress) {
                                 used_flag = true;
@@ -152,22 +192,19 @@ inline ApplyResult alternating_chain_core(
                         }
 
                         if (v == start) {
-                            // Start-closure inferences are handled in dedicated
-                            // Nice Loop strategy to keep AIC core conservative.
+                            // Cykle zamykające się wokół startu są certyfikowane w zewnętrznych
+                            // algorytmach Continuous Nice Loop, tutaj omijamy, żeby uniknąć hałasu.
                             continue;
                         }
 
-                        // Odd-length alternating chain endpoints seeing each other
-                        // force elimination in the intersection of their peers.
+                        // Eliminacje na przecięciu oddziaływań krańcowych węzłów łańcucha AIC.
+                        // Łańcuchy o nieparzystej długości zaczynające się silnym ogniwem - krańce są ujemne.
                         if (first_type == 1 && nd >= 3 && (nd & 1) == 1) {
-                            const int end_cell = sp.dyn_node_to_cell[v];
-                            if (st.is_peer(start_cell, end_cell)) {
-                                const ApplyResult er = aic_eliminate_common_peers(st, sp, bit, start_cell, end_cell);
-                                if (er == ApplyResult::Contradiction) return er;
-                                if (er == ApplyResult::Progress) {
-                                    used_flag = true;
-                                    return er;
-                                }
+                            const ApplyResult er = aic_eliminate_common_peers(st, sp, bit, start, v);
+                            if (er == ApplyResult::Contradiction) return er;
+                            if (er == ApplyResult::Progress) {
+                                used_flag = true;
+                                return er;
                             }
                         }
 

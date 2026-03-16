@@ -2,10 +2,10 @@
 // SUDOKU HPC - LOGIC ENGINE
 // Module: grouped_x_cycle.h (Level 7 - Nightmare)
 // Description: Direct grouped X-Cycle style elimination on strong/weak graph
-// per digit (zero-allocation).
+// per digit (zero-allocation). Zaktualizowano o pełne i poprawne wsparcie 
+// dla Węzłów Grupowych (Grouped Nodes) korzystających z tablicy adj_flat.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
-
 
 #pragma once
 
@@ -29,6 +29,26 @@ inline bool gx_is_strong_neighbor(const shared::ExactPatternScratchpad& sp, int 
     return false;
 }
 
+// Funkcja pomocnicza: Eliminuje kandydata ze wszystkich komórek wchodzących w skład węzła grupowego.
+inline ApplyResult gxc_eliminate_node(
+    CandidateState& st, 
+    const shared::ExactPatternScratchpad& sp, 
+    int node, 
+    uint64_t bit) {
+    
+    ApplyResult final_res = ApplyResult::NoProgress;
+    const int p0 = sp.adj_offsets[node];
+    const int p1 = sp.adj_offsets[node + 1];
+    
+    for (int p = p0; p < p1; ++p) {
+        const int cell = sp.adj_flat[p];
+        const ApplyResult er = st.eliminate(cell, bit);
+        if (er == ApplyResult::Contradiction) return er;
+        if (er == ApplyResult::Progress) final_res = ApplyResult::Progress;
+    }
+    return final_res;
+}
+
 inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = get_current_time_ns();
     ++s.use_count;
@@ -50,6 +70,16 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
         std::fill_n(color, sp.dyn_node_count, -1);
 
         for (int start = 0; start < sp.dyn_node_count; ++start) {
+            // Pomijamy węzeł, jeśli jakakolwiek jego komórka jest już wypełniona wartością
+            bool any_solved = false;
+            for (int p = sp.adj_offsets[start]; p < sp.adj_offsets[start + 1]; ++p) {
+                if (st.board->values[sp.adj_flat[p]] != 0) { 
+                    any_solved = true; 
+                    break; 
+                }
+            }
+            if (any_solved) continue;
+
             if (sp.dyn_strong_degree[start] == 0 || color[start] != -1) continue;
 
             std::fill_n(comp_mark, sp.dyn_node_count, 0);
@@ -100,14 +130,14 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
             const bool has_cycle = (comp_strong_edges_twice / 2) >= comp_size;
             if (!has_cycle && !color_conflict[0] && !color_conflict[1]) continue;
 
-            // Wrap-style elimination: same-color contradiction.
+            // Wrap-style elimination: same-color contradiction (dwa silne powiązania schodzą się z tym samym kolorem)
             for (int bad_color = 0; bad_color <= 1; ++bad_color) {
                 if (!color_conflict[bad_color]) continue;
                 for (int i = 0; i < comp_size; ++i) {
                     const int u = comp_nodes[i];
                     if (color[u] != bad_color) continue;
-                    const int cell = sp.dyn_node_to_cell[u];
-                    const ApplyResult er = st.eliminate(cell, bit);
+                    
+                    const ApplyResult er = gxc_eliminate_node(st, sp, u, bit);
                     if (er == ApplyResult::Contradiction) {
                         s.elapsed_ns += get_current_time_ns() - t0;
                         return er;
@@ -136,8 +166,8 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
                 for (int i = 0; i < comp_size; ++i) {
                     const int u = comp_nodes[i];
                     if (color[u] != bad_color) continue;
-                    const int cell = sp.dyn_node_to_cell[u];
-                    const ApplyResult er = st.eliminate(cell, bit);
+                    
+                    const ApplyResult er = gxc_eliminate_node(st, sp, u, bit);
                     if (er == ApplyResult::Contradiction) {
                         s.elapsed_ns += get_current_time_ns() - t0;
                         return er;
@@ -147,6 +177,7 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
             }
 
             // Trap-style elimination: external node seeing both colors.
+            // Komórka musi widzieć CAŁĄ GRUPĘ reprezentującą węzeł w przypadku węzłów grupowych.
             for (int i = 0; i < sp.dyn_digit_cell_count; ++i) {
                 const int t_cell = sp.dyn_digit_cells[i];
                 const int t_node = sp.dyn_cell_to_node[t_cell];
@@ -156,10 +187,12 @@ inline ApplyResult apply_grouped_x_cycle(CandidateState& st, StrategyStats& s, G
                 bool sees1 = false;
                 for (int k = 0; k < comp_size; ++k) {
                     const int u = comp_nodes[k];
-                    const int u_cell = sp.dyn_node_to_cell[u];
-                    if (!st.is_peer(t_cell, u_cell)) continue;
+                    // Zmiana: Musi widzieć wszystkie komórki grupy u
+                    if (!shared::node_sees_cell(st, sp, u, t_cell)) continue;
+                    
                     if (color[u] == 0) sees0 = true;
                     else sees1 = true;
+                    
                     if (sees0 && sees1) break;
                 }
                 if (!(sees0 && sees1)) continue;

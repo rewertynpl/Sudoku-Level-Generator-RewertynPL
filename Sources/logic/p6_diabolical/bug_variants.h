@@ -4,10 +4,9 @@
 // Opis: Implementacja zaawansowanych wariantów Bivalue Universal Grave 
 //       (BUG Type 2, BUG Type 3, BUG Type 4). Służą do eliminacji kandydatów 
 //       na krawędzi Deadly Pattern'u, gdy występuje więcej niż jedna komórka 
-//       typu trivalue.
+//       typu trivalue. Zabezpieczono wymóg, by reszta planszy była STRICTLY bivalue.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
-
 
 #pragma once
 
@@ -39,13 +38,26 @@ inline ApplyResult apply_bug_type2(CandidateState& st, StrategyStats& s, Generic
     const int nn = st.topo->nn;
     int tri[64]{};
     int tc = 0;
+    bool is_valid_bug_base = true;
     
-    // Filtrujemy planszę w poszukiwaniu komórek trivalue
+    // Filtrujemy planszę: 
+    // - zbieramy komórki trivalue,
+    // - wymagamy, aby WSZYSTKIE pozostałe puste komórki były BIVALUE (popcount == 2).
     for (int idx = 0; idx < nn; ++idx) {
         if (st.board->values[idx] != 0) continue;
-        if (std::popcount(st.cands[idx]) == 3) {
+        
+        const int pc = std::popcount(st.cands[idx]);
+        if (pc == 3) {
             if (tc < 64) tri[tc++] = idx;
+        } else if (pc != 2) {
+            is_valid_bug_base = false;
+            break;
         }
+    }
+    
+    if (!is_valid_bug_base || tc < 2) {
+        s.elapsed_ns += st.now_ns() - t0;
+        return ApplyResult::NoProgress;
     }
     
     bool progress = false;
@@ -63,16 +75,6 @@ inline ApplyResult apply_bug_type2(CandidateState& st, StrategyStats& s, Generic
             // Warunek: Dwie wspólne "oryginalne" cyfry BUG-a, oraz trzecia "obca"
             if (std::popcount(shared) != 2) continue;
             
-            // "Obca" cyfra z poza pary shared to nasza cyfra X. Musi zostać w A lub B.
-            // BUG Type 2 uderza we wspólne cele tych dwóch komórek i usuwa stamtąd cyfrę X.
-            // Dla ułatwienia operacji, w C++ "st.keep_only(..., shared)" eliminuje wszystkie
-            // INNE cyfry (w tym cyfrę X) dla komórek widzących a i b, które nie są częścią BUG'a.
-            
-            // Jednak to nie jest w 100% bezpieczne dla asymetrycznych siatek bez głębokiej walidacji.
-            // Bardziej ortodoksyjna wersja Type 2: My wymuszamy, że cyfra X musi być 
-            // prawdziwa dla A lub dla B. Wobec tego każdy 'target' widzący i A i B 
-            // nie może być X.
-            
             uint64_t xa = ma & ~shared;
             uint64_t xb = mb & ~shared;
             
@@ -89,7 +91,10 @@ inline ApplyResult apply_bug_type2(CandidateState& st, StrategyStats& s, Generic
                 if (!st.is_peer(t, b)) continue; // Musi widzieć oba węzły
                 
                 const ApplyResult er = st.eliminate(t, extra_digit);
-                if (er == ApplyResult::Contradiction) { s.elapsed_ns += st.now_ns() - t0; return er; }
+                if (er == ApplyResult::Contradiction) { 
+                    s.elapsed_ns += st.now_ns() - t0; 
+                    return er; 
+                }
                 progress = progress || (er == ApplyResult::Progress);
             }
         }
@@ -111,7 +116,6 @@ inline ApplyResult apply_bug_type2(CandidateState& st, StrategyStats& s, Generic
 // Przekłada poszukiwanie z komórek na "domki". Jeżeli te same trivalue cells 
 // dzielą wspólny domek i ich wspólne unikalne cyfry występują w tym domku tylko
 // w tych specyficznych komórkach, redukuje bivalues.
-// (Uproszczona, zoptymalizowana hybryda skanu dla HPC).
 // ============================================================================
 inline ApplyResult apply_bug_type3(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = st.now_ns();
@@ -126,14 +130,21 @@ inline ApplyResult apply_bug_type3(CandidateState& st, StrategyStats& s, Generic
     const int nn = st.topo->nn;
     int tri[64]{};
     int tc = 0;
+    bool is_valid_bug_base = true;
     
     for (int idx = 0; idx < nn; ++idx) {
         if (st.board->values[idx] != 0) continue;
-        if (std::popcount(st.cands[idx]) == 3 && tc < 64) {
-            tri[tc++] = idx;
+        
+        const int pc = std::popcount(st.cands[idx]);
+        if (pc == 3) {
+            if (tc < 64) tri[tc++] = idx;
+        } else if (pc != 2) {
+            is_valid_bug_base = false;
+            break;
         }
     }
-    if (tc == 0) {
+    
+    if (!is_valid_bug_base || tc < 2) {
         s.elapsed_ns += st.now_ns() - t0;
         return ApplyResult::NoProgress;
     }
@@ -167,7 +178,9 @@ inline ApplyResult apply_bug_type3(CandidateState& st, StrategyStats& s, Generic
                 if (st.board->values[t] == 0 && (st.cands[t] & bit) != 0ULL) ++box_cnt;
             }
             
-            // Warunek rozwiązujący "True Value" paradoksu
+            // Warunek rozwiązujący "True Value" paradoksu.
+            // Jeśli cyfra występuje nieparzystą ilość razy we wszystkich obszarach domków, 
+            // postawienie jej stabilizuje parzystość domków i unika Deadly Patternu.
             if ((row_cnt & 1) == 1 && (col_cnt & 1) == 1 && (box_cnt & 1) == 1) {
                 const int d = config::bit_ctz_u64(bit) + 1;
                 if (!st.place(idx, d)) {
@@ -208,12 +221,23 @@ inline ApplyResult apply_bug_type4(CandidateState& st, StrategyStats& s, Generic
     const int nn = st.topo->nn;
     int tri[64]{};
     int tc = 0;
+    bool is_valid_bug_base = true;
     
     for (int idx = 0; idx < nn; ++idx) {
         if (st.board->values[idx] != 0) continue;
-        if (std::popcount(st.cands[idx]) == 3 && tc < 64) {
-            tri[tc++] = idx;
+        
+        const int pc = std::popcount(st.cands[idx]);
+        if (pc == 3) {
+            if (tc < 64) tri[tc++] = idx;
+        } else if (pc != 2) {
+            is_valid_bug_base = false;
+            break;
         }
+    }
+    
+    if (!is_valid_bug_base || tc < 2) {
+        s.elapsed_ns += st.now_ns() - t0;
+        return ApplyResult::NoProgress;
     }
     
     bool progress = false;

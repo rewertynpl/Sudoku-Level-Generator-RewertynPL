@@ -941,6 +941,16 @@ inline StrategySmokeProfile strategy_smoke_profile(
 
     profile.box_rows = (variant == StrategySmokeVariant::Asymmetric) ? 4 : 3;
     profile.box_cols = (variant == StrategySmokeVariant::Asymmetric) ? 3 : 3;
+
+    // POPRAWKA: Zaawansowane ryby wymagają N >= 12, inaczej degenerują się do Jellyfish/Swordfish (Dopełnienia)
+    if (rs == RequiredStrategy::Squirmbag || 
+        rs == RequiredStrategy::FrankenFish || 
+        rs == RequiredStrategy::MutantFish || 
+        rs == RequiredStrategy::KrakenFish) {
+        profile.box_rows = 4;
+        profile.box_cols = 3; // N = 12
+    }
+
     profile.difficulty = std::max(1, strategy_min_level(rs));
     profile.seed = strategy_smoke_seed(rs, variant);
     profile.pattern_forcing = (profile.difficulty >= 4);
