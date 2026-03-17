@@ -141,6 +141,19 @@ Modify the "Clue Ceiling" to an intermediate value (approx. 35% - 48%). You cann
 
 The Digger MCTS must protect the "Blind Spots" (Dead Zones).
 
+OR:
+The clue window is currently too "averaged out," which ends up hurting both sides of the fence.
+
+In resolve_auto_clue_range(), you have a single, shared mechanism for both the generator and the smoke/certifier, with bolted-on exceptions per pattern family. For many difficult families, you are actually raising the lower bound of the clue density (std::max(min_clues, ...)), effectively pushing the boards toward denser states. This helps preserve the structure, but at the same time, it frequently increases the chance of early simple solutions or alternative certifications. On the flip side, for patterns like Sue de Coq or Death Blossom, you deliberately use a sparser window. So the code itself already proves that a single "golden mean" just doesn't cut it.
+
+My assessment:
+Yes, there should be 2 separate clue policy frameworks:
+generator window: serves to keep the pattern alive and protect the core,
+certifier/smoke window: serves the purpose of honest validation, not ease of generation.
+A single, averaged window performs poorly because it tries to optimize for two conflicting goals at once.
+
+
+
 B) The "Self-Destructing Patterns" Problem
 This is the second of the two hardest problems in reverse Sudoku generation engines (MCTS + DLX). You have collided with the problem of "Self-Destructing Patterns" in the Generator.
 Practically 100% of the board was solved by the simplest strategy in the world—Naked Single (Level 1)! The board never "got stuck", so the certifier NEVER reached Level 6, where your ALS-XZ is located. Since the certifier never got there, the function wasn't called at all, hence use: 0.
