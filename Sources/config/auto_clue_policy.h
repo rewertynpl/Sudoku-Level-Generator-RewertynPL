@@ -29,129 +29,8 @@ enum class StrategyClueFamily : uint8_t {
     HeavyFish,
 };
 
-struct GoldilocksClueWindow {
-    double ratio_lo = 0.0;
-    double ratio_hi = 0.0;
-};
-
-struct StrategyClueFamilyPolicy {
-    StrategyClueFamily family = StrategyClueFamily::Generic;
-
-    // Shift applied to the base Goldilocks window.
-    double generator_lo_shift = 0.0;
-    double generator_hi_shift = 0.0;
-    double certifier_lo_shift = 0.0;
-    double certifier_hi_shift = 0.0;
-
-    // Extra width adjustments.
-    double generator_width_delta = 0.0;
-    double certifier_width_delta = 0.0;
-
-    // Structural hints for callers / diagnostics.
-    bool preserve_structure = false;
-    bool exact_sensitive = false;
-};
-
-inline int auto_clue_scaled_count(int nn, double ratio) {
-    if (nn <= 0) return 0;
-    const double clamped = std::clamp(ratio, 0.0, 1.0);
-    return static_cast<int>(std::lround(static_cast<double>(nn) * clamped));
-}
-
-inline bool auto_clue_geometry_is_primary_3x3(int box_rows, int box_cols) {
-    return box_rows == 3 && box_cols == 3;
-}
-
 inline bool auto_clue_geometry_is_asymmetric(int box_rows, int box_cols) {
     return box_rows != box_cols;
-}
-
-inline bool auto_clue_geometry_is_large(int n) {
-    return n >= 12;
-}
-
-inline int auto_clue_strategy_min_level(RequiredStrategy required) {
-    switch (required) {
-        case RequiredStrategy::None:
-        case RequiredStrategy::NakedSingle:
-        case RequiredStrategy::HiddenSingle:
-            return 1;
-
-        case RequiredStrategy::PointingPairs:
-        case RequiredStrategy::BoxLineReduction:
-        case RequiredStrategy::NakedPair:
-        case RequiredStrategy::HiddenPair:
-        case RequiredStrategy::NakedTriple:
-        case RequiredStrategy::HiddenTriple:
-            return 2;
-
-        case RequiredStrategy::NakedQuad:
-        case RequiredStrategy::HiddenQuad:
-        case RequiredStrategy::XWing:
-        case RequiredStrategy::YWing:
-        case RequiredStrategy::Skyscraper:
-        case RequiredStrategy::TwoStringKite:
-        case RequiredStrategy::EmptyRectangle:
-        case RequiredStrategy::RemotePairs:
-            return 3;
-
-        case RequiredStrategy::Swordfish:
-        case RequiredStrategy::XYZWing:
-        case RequiredStrategy::FinnedXWingSashimi:
-        case RequiredStrategy::UniqueRectangle:
-        case RequiredStrategy::BUGPlusOne:
-        case RequiredStrategy::WWing:
-        case RequiredStrategy::SimpleColoring:
-            return 4;
-
-        case RequiredStrategy::Jellyfish:
-        case RequiredStrategy::WXYZWing:
-        case RequiredStrategy::FinnedSwordfishJellyfish:
-        case RequiredStrategy::XChain:
-        case RequiredStrategy::XYChain:
-        case RequiredStrategy::ALSXZ:
-        case RequiredStrategy::UniqueLoop:
-        case RequiredStrategy::AvoidableRectangle:
-        case RequiredStrategy::BivalueOddagon:
-        case RequiredStrategy::UniqueRectangleExtended:
-        case RequiredStrategy::HiddenUniqueRectangle:
-        case RequiredStrategy::BUGType2:
-        case RequiredStrategy::BUGType3:
-        case RequiredStrategy::BUGType4:
-        case RequiredStrategy::BorescoperQiuDeadlyPattern:
-            return 5;
-
-        case RequiredStrategy::Medusa3D:
-        case RequiredStrategy::AIC:
-        case RequiredStrategy::GroupedAIC:
-        case RequiredStrategy::GroupedXCycle:
-        case RequiredStrategy::ContinuousNiceLoop:
-        case RequiredStrategy::ALSXYWing:
-        case RequiredStrategy::ALSChain:
-        case RequiredStrategy::ALSAIC:
-        case RequiredStrategy::SueDeCoq:
-        case RequiredStrategy::DeathBlossom:
-        case RequiredStrategy::FrankenFish:
-        case RequiredStrategy::MutantFish:
-        case RequiredStrategy::KrakenFish:
-        case RequiredStrategy::Squirmbag:
-        case RequiredStrategy::AlignedPairExclusion:
-        case RequiredStrategy::AlignedTripleExclusion:
-            return 6;
-
-        case RequiredStrategy::MSLS:
-        case RequiredStrategy::Exocet:
-        case RequiredStrategy::SeniorExocet:
-        case RequiredStrategy::SKLoop:
-        case RequiredStrategy::PatternOverlayMethod:
-        case RequiredStrategy::ForcingChains:
-        case RequiredStrategy::DynamicForcingChains:
-            return 7;
-
-        case RequiredStrategy::Backtracking:
-            return 8;
-    }
-    return 1;
 }
 
 inline StrategyClueFamily auto_clue_strategy_family(RequiredStrategy required) {
@@ -224,9 +103,9 @@ inline StrategyClueFamily auto_clue_strategy_family(RequiredStrategy required) {
         case RequiredStrategy::MutantFish:
         case RequiredStrategy::KrakenFish:
         case RequiredStrategy::Squirmbag:
-        case RequiredStrategy::MSLS:
             return StrategyClueFamily::HeavyFish;
 
+        case RequiredStrategy::MSLS:
         case RequiredStrategy::Exocet:
         case RequiredStrategy::SeniorExocet:
         case RequiredStrategy::SKLoop:
@@ -240,229 +119,43 @@ inline StrategyClueFamily auto_clue_strategy_family(RequiredStrategy required) {
     }
 }
 
-inline StrategyClueFamilyPolicy auto_clue_family_policy(RequiredStrategy required) {
-    StrategyClueFamilyPolicy out{};
-    out.family = auto_clue_strategy_family(required);
+struct HardSplitDef {
+    int gen_min;
+    int gen_max;
+    int cert_min;
+    int cert_max;
+};
 
-    switch (out.family) {
-        case StrategyClueFamily::EarlySingles:
-            out.generator_lo_shift = -0.030;
-            out.generator_hi_shift = -0.015;
-            out.certifier_lo_shift = -0.040;
-            out.certifier_hi_shift = -0.020;
-            break;
-
-        case StrategyClueFamily::Intersections:
-        case StrategyClueFamily::Subsets:
-            out.generator_lo_shift = -0.010;
-            out.generator_hi_shift = +0.010;
-            out.certifier_lo_shift = -0.020;
-            out.certifier_hi_shift = -0.005;
-            break;
-
-        case StrategyClueFamily::WingsChainsAls:
-            out.generator_lo_shift = +0.015;
-            out.generator_hi_shift = +0.030;
-            out.certifier_lo_shift = -0.010;
-            out.certifier_hi_shift = +0.005;
-            out.generator_width_delta = +0.010;
-            out.certifier_width_delta = -0.005;
-            out.preserve_structure = true;
-            out.exact_sensitive = true;
-            break;
-
-        case StrategyClueFamily::Fish:
-            out.generator_lo_shift = +0.005;
-            out.generator_hi_shift = +0.020;
-            out.certifier_lo_shift = -0.005;
-            out.certifier_hi_shift = +0.000;
-            out.preserve_structure = true;
-            break;
-
-        case StrategyClueFamily::Uniqueness:
-            out.generator_lo_shift = +0.010;
-            out.generator_hi_shift = +0.025;
-            out.certifier_lo_shift = +0.000;
-            out.certifier_hi_shift = +0.010;
-            out.preserve_structure = true;
-            break;
-
-        case StrategyClueFamily::PetalBottleneck:
-            out.generator_lo_shift = -0.015;
-            out.generator_hi_shift = +0.000;
-            out.certifier_lo_shift = -0.030;
-            out.certifier_hi_shift = -0.010;
-            out.generator_width_delta = -0.005;
-            out.certifier_width_delta = -0.010;
-            break;
-
-        case StrategyClueFamily::TheoreticalExact:
-            out.generator_lo_shift = +0.025;
-            out.generator_hi_shift = +0.045;
-            out.certifier_lo_shift = -0.015;
-            out.certifier_hi_shift = +0.005;
-            out.generator_width_delta = +0.005;
-            out.certifier_width_delta = -0.010;
-            out.preserve_structure = true;
-            out.exact_sensitive = true;
-            break;
-
-        case StrategyClueFamily::HeavyFish:
-            out.generator_lo_shift = +0.030;
-            out.generator_hi_shift = +0.050;
-            out.certifier_lo_shift = +0.000;
-            out.certifier_hi_shift = +0.015;
-            out.generator_width_delta = +0.010;
-            out.certifier_width_delta = -0.005;
-            out.preserve_structure = true;
-            out.exact_sensitive = true;
-            break;
-
-        case StrategyClueFamily::Generic:
-        default:
-            out.generator_lo_shift = +0.005;
-            out.generator_hi_shift = +0.015;
-            out.certifier_lo_shift = -0.010;
-            out.certifier_hi_shift = -0.005;
-            break;
+// Rygorystyczne widełki zagęszczenia na bazie klasycznego 9x9 (N=9)
+inline HardSplitDef get_n9_hard_split(StrategyClueFamily family) {
+    switch (family) {
+        case StrategyClueFamily::EarlySingles:     return {30, 36, 28, 34};
+        case StrategyClueFamily::Intersections:    return {36, 42, 25, 29};
+        case StrategyClueFamily::Subsets:          return {38, 44, 24, 28};
+        case StrategyClueFamily::WingsChainsAls:   return {45, 52, 22, 26};
+        case StrategyClueFamily::Fish:             return {42, 48, 23, 27};
+        case StrategyClueFamily::Uniqueness:       return {48, 56, 25, 28};
+        case StrategyClueFamily::PetalBottleneck:  return {45, 52, 22, 25};
+        case StrategyClueFamily::TheoreticalExact: return {50, 62, 22, 25};
+        case StrategyClueFamily::HeavyFish:        return {50, 62, 22, 25}; // Fallback ochronny
+        case StrategyClueFamily::Generic: default: return {38, 44, 24, 28};
     }
-
-    return out;
 }
 
-inline GoldilocksClueWindow compute_goldilocks_base_window(
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required) {
-
-    const int n = std::max(1, box_rows * box_cols);
-    const int lvl = std::max(1, std::max(std::clamp(difficulty_level, 1, 8), auto_clue_strategy_min_level(required)));
-
-    // Base Goldilocks zone:
-    // - lower levels: denser puzzles
-    // - higher levels: sparser puzzles
-    // - higher geometry sizes: slightly denser again to preserve structure
-    double ratio_hi = std::clamp(0.64 - 0.040 * static_cast<double>(lvl - 1), 0.18, 0.72);
-    double ratio_lo = std::clamp(ratio_hi - 0.12, 0.10, ratio_hi);
-
-    if (auto_clue_geometry_is_asymmetric(box_rows, box_cols)) {
-        ratio_hi += 0.015;
-        ratio_lo += 0.010;
+// Rygorystyczne widełki zagęszczenia na bazie planszy 12x12 (N=12) - asymetrycznej 4x3
+inline HardSplitDef get_n12_hard_split(StrategyClueFamily family) {
+    switch (family) {
+        case StrategyClueFamily::EarlySingles:     return {55, 65, 50, 60};
+        case StrategyClueFamily::Intersections:    return {65, 75, 45, 55};
+        case StrategyClueFamily::Subsets:          return {70, 80, 42, 50};
+        case StrategyClueFamily::WingsChainsAls:   return {85, 95, 38, 46};
+        case StrategyClueFamily::Fish:             return {80, 90, 40, 48};
+        case StrategyClueFamily::Uniqueness:       return {90, 105, 42, 48};
+        case StrategyClueFamily::PetalBottleneck:  return {85, 95, 35, 45};
+        case StrategyClueFamily::TheoreticalExact: return {95, 110, 35, 42};
+        case StrategyClueFamily::HeavyFish:        return {100, 115, 40, 46};
+        case StrategyClueFamily::Generic: default: return {70, 80, 42, 50};
     }
-
-    if (auto_clue_geometry_is_large(n)) {
-        ratio_hi += 0.020;
-        ratio_lo += 0.015;
-    }
-
-    const StrategyClueFamily family = auto_clue_strategy_family(required);
-    if (family == StrategyClueFamily::TheoreticalExact || family == StrategyClueFamily::HeavyFish) {
-        ratio_hi += 0.020;
-        ratio_lo += 0.015;
-    } else if (family == StrategyClueFamily::PetalBottleneck) {
-        ratio_hi -= 0.010;
-        ratio_lo -= 0.010;
-    }
-
-    ratio_hi = std::clamp(ratio_hi, 0.16, 0.84);
-    ratio_lo = std::clamp(ratio_lo, 0.08, ratio_hi);
-
-    return GoldilocksClueWindow{ratio_lo, ratio_hi};
-}
-
-inline GoldilocksClueWindow adjust_goldilocks_for_generator(
-    GoldilocksClueWindow base,
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required) {
-
-    const int n = std::max(1, box_rows * box_cols);
-    const int lvl = std::max(1, std::max(std::clamp(difficulty_level, 1, 8), auto_clue_strategy_min_level(required)));
-    const StrategyClueFamilyPolicy policy = auto_clue_family_policy(required);
-
-    double lo = base.ratio_lo + policy.generator_lo_shift;
-    double hi = base.ratio_hi + policy.generator_hi_shift;
-
-    const double width = std::max(0.05, (hi - lo) + policy.generator_width_delta);
-    hi = std::max(hi, lo + width);
-
-    // Harder requested levels usually need a little more structural density in generation.
-    if (lvl >= 6) {
-        lo += 0.005;
-        hi += 0.010;
-    }
-
-    if (auto_clue_geometry_is_primary_3x3(box_rows, box_cols) && policy.exact_sensitive) {
-        // 3x3 exact patterns are brittle: bias a touch denser in generator.
-        lo += 0.010;
-        hi += 0.015;
-    }
-
-    if (n >= 16 && policy.preserve_structure) {
-        lo += 0.010;
-        hi += 0.015;
-    }
-
-    lo = std::clamp(lo, 0.08, 0.88);
-    hi = std::clamp(hi, lo, 0.90);
-    return GoldilocksClueWindow{lo, hi};
-}
-
-inline GoldilocksClueWindow adjust_goldilocks_for_certifier(
-    GoldilocksClueWindow base,
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required) {
-
-    const int n = std::max(1, box_rows * box_cols);
-    const int lvl = std::max(1, std::max(std::clamp(difficulty_level, 1, 8), auto_clue_strategy_min_level(required)));
-    const StrategyClueFamilyPolicy policy = auto_clue_family_policy(required);
-
-    double lo = base.ratio_lo + policy.certifier_lo_shift;
-    double hi = base.ratio_hi + policy.certifier_hi_shift;
-
-    const double width = std::max(0.05, (hi - lo) + policy.certifier_width_delta);
-    hi = std::max(hi, lo + width);
-
-    // Certifier should slightly prefer sparser states when exact-sensitive,
-    // to reduce overshadowing by easy singles and generic proxies.
-    if (policy.exact_sensitive) {
-        lo -= 0.005;
-        hi -= 0.005;
-    }
-
-    if (lvl >= 7 && auto_clue_geometry_is_primary_3x3(box_rows, box_cols)) {
-        lo -= 0.005;
-        hi -= 0.010;
-    }
-
-    const StrategyClueFamily family = auto_clue_strategy_family(required);
-    if (family == StrategyClueFamily::PetalBottleneck) {
-        lo -= 0.005;
-        hi -= 0.005;
-    }
-
-    if (n >= 16 && policy.preserve_structure) {
-        // Do not over-thin large exact boards.
-        hi += 0.005;
-    }
-
-    lo = std::clamp(lo, 0.06, 0.84);
-    hi = std::clamp(hi, lo, 0.88);
-    return GoldilocksClueWindow{lo, hi};
-}
-
-inline ClueRange clue_range_from_goldilocks(int nn, GoldilocksClueWindow window) {
-    ClueRange out{};
-    out.min_clues = auto_clue_scaled_count(nn, window.ratio_lo);
-    out.max_clues = auto_clue_scaled_count(nn, window.ratio_hi);
-    if (out.max_clues < out.min_clues) out.max_clues = out.min_clues;
-    out.min_clues = std::clamp(out.min_clues, 0, nn);
-    out.max_clues = std::clamp(out.max_clues, out.min_clues, nn);
-    return out;
 }
 
 inline ClueRange resolve_auto_clue_range_goldilocks(
@@ -474,47 +167,72 @@ inline ClueRange resolve_auto_clue_range_goldilocks(
 
     const int n = std::max(1, box_rows * box_cols);
     const int nn = n * n;
-
-    const GoldilocksClueWindow base =
-        compute_goldilocks_base_window(box_rows, box_cols, difficulty_level, required);
-
-    GoldilocksClueWindow adjusted = base;
-    switch (policy) {
-        case AutoClueWindowPolicy::Generator:
-            adjusted = adjust_goldilocks_for_generator(base, box_rows, box_cols, difficulty_level, required);
-            break;
-        case AutoClueWindowPolicy::Certifier:
-            adjusted = adjust_goldilocks_for_certifier(base, box_rows, box_cols, difficulty_level, required);
-            break;
-        case AutoClueWindowPolicy::Shared:
-        default:
-            break;
+    
+    // Twardy fallback dla trybów bez strategii strukturalnej (lub Bruteforce)
+    if (required == RequiredStrategy::Backtracking || required == RequiredStrategy::None) {
+        if (required == RequiredStrategy::Backtracking) {
+            return {std::max(4, n), nn};
+        }
+        int base_min = static_cast<int>(std::lround(0.28 * nn));
+        int base_max = static_cast<int>(std::lround(0.40 * nn));
+        return {std::clamp(base_min, 0, nn), std::clamp(base_max, 0, nn)};
     }
 
-    ClueRange out = clue_range_from_goldilocks(nn, adjusted);
-
-    // Family-specific hard floors / caps after ratio conversion.
-    const StrategyClueFamily family = auto_clue_strategy_family(required);
-    if (family == StrategyClueFamily::HeavyFish) {
-        const int min_floor = std::max(n, static_cast<int>(std::lround(0.28 * static_cast<double>(nn))));
-        out.min_clues = std::max(out.min_clues, min_floor);
-        out.max_clues = std::max(out.max_clues, out.min_clues);
-    } else if (family == StrategyClueFamily::TheoreticalExact) {
-        const int min_floor = std::max(n, static_cast<int>(std::lround(0.24 * static_cast<double>(nn))));
-        out.min_clues = std::max(out.min_clues, min_floor);
-        out.max_clues = std::max(out.max_clues, out.min_clues);
-    } else if (family == StrategyClueFamily::PetalBottleneck) {
-        const int max_cap = std::max(out.min_clues, static_cast<int>(std::lround(0.62 * static_cast<double>(nn))));
-        out.max_clues = std::min(out.max_clues, max_cap);
-        out.max_clues = std::max(out.max_clues, out.min_clues);
+    const bool is_asym = auto_clue_geometry_is_asymmetric(box_rows, box_cols);
+    // Shared zbiega w stronę Certyfikatora (najniższego mianownika gwarantującego unikalność po usunięciu rusztowania)
+    const bool use_gen_bounds = (policy == AutoClueWindowPolicy::Generator);
+    
+    StrategyClueFamily family = auto_clue_strategy_family(required);
+    
+    HardSplitDef n9 = get_n9_hard_split(family);
+    HardSplitDef n12 = get_n12_hard_split(family);
+    
+    double ratio_min, ratio_max;
+    
+    if (n == 9) {
+        ratio_min = static_cast<double>(use_gen_bounds ? n9.gen_min : n9.cert_min) / 81.0;
+        ratio_max = static_cast<double>(use_gen_bounds ? n9.gen_max : n9.cert_max) / 81.0;
+    } else if (n == 12) {
+        ratio_min = static_cast<double>(use_gen_bounds ? n12.gen_min : n12.cert_min) / 144.0;
+        ratio_max = static_cast<double>(use_gen_bounds ? n12.gen_max : n12.cert_max) / 144.0;
+    } else if (n < 9) {
+        ratio_min = static_cast<double>(use_gen_bounds ? n9.gen_min : n9.cert_min) / 81.0;
+        ratio_max = static_cast<double>(use_gen_bounds ? n9.gen_max : n9.cert_max) / 81.0;
+    } else if (n > 12) {
+        ratio_min = static_cast<double>(use_gen_bounds ? n12.gen_min : n12.cert_min) / 144.0;
+        ratio_max = static_cast<double>(use_gen_bounds ? n12.gen_max : n12.cert_max) / 144.0;
+    } else {
+        // Skalowanie proporcjonalne (interpolacja) dla wymiarów przejściowych (np. N=10)
+        double t = (static_cast<double>(n) - 9.0) / 3.0;
+        double r9_min = static_cast<double>(use_gen_bounds ? n9.gen_min : n9.cert_min) / 81.0;
+        double r9_max = static_cast<double>(use_gen_bounds ? n9.gen_max : n9.cert_max) / 81.0;
+        double r12_min = static_cast<double>(use_gen_bounds ? n12.gen_min : n12.cert_min) / 144.0;
+        double r12_max = static_cast<double>(use_gen_bounds ? n12.gen_max : n12.cert_max) / 144.0;
+        ratio_min = r9_min + t * (r12_min - r9_min);
+        ratio_max = r9_max + t * (r12_max - r9_max);
     }
-
-    // Keep trivial/Bruteforce ends sane.
-    if (required == RequiredStrategy::Backtracking) {
-        out.min_clues = std::max(out.min_clues, std::max(4, n));
-        out.max_clues = std::max(out.max_clues, out.min_clues);
+    
+    // Korekta geometryczna dla asymetrii (N=12 już ma ją wbitą bazowo z samej tabeli)
+    if (is_asym && n != 12) {
+        double asym_shift = use_gen_bounds ? 0.015 : 0.010;
+        ratio_min += asym_shift;
+        ratio_max += asym_shift;
     }
-
-    return out;
+    
+    int out_min = static_cast<int>(std::lround(ratio_min * nn));
+    int out_max = static_cast<int>(std::lround(ratio_max * nn));
+    
+    // Absolutne wymuszanie sztywnych krawędzi tabeli dla referencyjnych wymiarów (unikamy błędów float lround)
+    if (n == 9 && !is_asym) {
+        out_min = use_gen_bounds ? n9.gen_min : n9.cert_min;
+        out_max = use_gen_bounds ? n9.gen_max : n9.cert_max;
+    } else if (n == 12) {
+        out_min = use_gen_bounds ? n12.gen_min : n12.cert_min;
+        out_max = use_gen_bounds ? n12.gen_max : n12.cert_max;
+    }
+    
+    out_min = std::clamp(out_min, 0, nn);
+    out_max = std::clamp(out_max, out_min, nn);
+    
+    return {out_min, out_max};
 }
-

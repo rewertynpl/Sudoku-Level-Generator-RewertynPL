@@ -193,7 +193,7 @@ inline bool write_quality_benchmark_report(
         << "smoke_primary_difficulty,smoke_primary_seed,smoke_primary_pattern_forcing,smoke_primary_mcts_profile,"
         << "smoke_primary_strict_canonical,smoke_primary_allow_proxy,smoke_primary_max_total_time_s,"
         << "smoke_primary_max_attempts,smoke_primary_min_required_use,smoke_primary_min_required_hit,"
-        << "smoke_primary_exact_contract_required,smoke_primary_cli,smoke_asymmetric_variant,"
+        << "smoke_primary_exact_contract_required,smoke_primary_shared_clues,smoke_primary_generator_clues,smoke_primary_certifier_clues,smoke_primary_cli,smoke_asymmetric_variant,"
         << "smoke_asymmetric_box_rows,smoke_asymmetric_box_cols,smoke_asymmetric_difficulty,"
         << "smoke_asymmetric_seed,smoke_asymmetric_pattern_forcing,smoke_asymmetric_mcts_profile,"
         << "smoke_asymmetric_strict_canonical,smoke_asymmetric_allow_proxy,smoke_asymmetric_max_total_time_s,"
@@ -218,16 +218,12 @@ inline bool write_quality_benchmark_report(
             : StrategySmokeProfile{};
         const bool primary_exact_contract_required =
             row.exact_contract_required && primary.exact_contract_required;
-        const ClueRange primary_generator_clues = resolve_auto_clue_range(primary.box_rows, primary.box_cols, primary.difficulty, row.required_strategy, AutoClueWindowPolicy::Generator);
-        const ClueRange primary_certifier_clues = resolve_auto_clue_range(primary.box_rows, primary.box_cols, primary.difficulty, row.required_strategy, AutoClueWindowPolicy::Certifier);
         const uint64_t primary_min_use =
             std::max<uint64_t>(primary.min_required_use, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
         const uint64_t primary_min_hit =
             std::max<uint64_t>(primary.min_required_hit, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
         const bool asymmetric_exact_contract_required =
             row.exact_contract_required && asymmetric.exact_contract_required;
-        const ClueRange asymmetric_generator_clues = asymmetric.enabled ? resolve_auto_clue_range(asymmetric.box_rows, asymmetric.box_cols, asymmetric.difficulty, row.required_strategy, AutoClueWindowPolicy::Generator) : ClueRange{};
-        const ClueRange asymmetric_certifier_clues = asymmetric.enabled ? resolve_auto_clue_range(asymmetric.box_rows, asymmetric.box_cols, asymmetric.difficulty, row.required_strategy, AutoClueWindowPolicy::Certifier) : ClueRange{};
         const uint64_t asymmetric_min_use =
             std::max<uint64_t>(asymmetric.min_required_use, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
         const uint64_t asymmetric_min_hit =
@@ -255,8 +251,6 @@ inline bool write_quality_benchmark_report(
             << " fallback=" << bool_flag(row.generator_family_fallback_wired)
             << " smoke=" << bool_flag(row.smoke_profile_present)
             << " seedability=" << seedability
-            << " primary_generator_clues=" << primary_generator_clues.min_clues << "-" << primary_generator_clues.max_clues
-            << " primary_certifier_clues=" << primary_certifier_clues.min_clues << "-" << primary_certifier_clues.max_clues
             << "\n";
 
         csv
@@ -300,8 +294,6 @@ inline bool write_quality_benchmark_report(
             << primary_min_hit << ","
             << bool_flag(primary_exact_contract_required) << ","
             << csv_escape(primary_cli) << ","
-            << csv_escape(std::to_string(primary_generator_clues.min_clues) + "-" + std::to_string(primary_generator_clues.max_clues)) << ","
-            << csv_escape(std::to_string(primary_certifier_clues.min_clues) + "-" + std::to_string(primary_certifier_clues.max_clues)) << ","
             << csv_escape(asymmetric.variant_label) << ","
             << asymmetric.box_rows << ","
             << asymmetric.box_cols << ","
@@ -316,9 +308,7 @@ inline bool write_quality_benchmark_report(
             << asymmetric_min_use << ","
             << asymmetric_min_hit << ","
             << bool_flag(asymmetric_exact_contract_required) << ","
-            << csv_escape(asymmetric_cli) << ","
-            << csv_escape(std::to_string(asymmetric_generator_clues.min_clues) + "-" + std::to_string(asymmetric_generator_clues.max_clues)) << ","
-            << csv_escape(std::to_string(asymmetric_certifier_clues.min_clues) + "-" + std::to_string(asymmetric_certifier_clues.max_clues))
+            << csv_escape(asymmetric_cli)
             << "\n";
     }
 

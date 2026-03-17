@@ -3,7 +3,8 @@
 // Moduł: house_subsets.h (Poziomy 2, 3, 4)
 // Opis: Wykrywanie i aplikacja podzbiorów (Naked/Hidden Pairs, Triples, Quads).
 //       Zero-allocation, bez założeń o geometrii symetrycznej, z mocniejszą
-//       kanonicznością dla generatora/certyfikacji.
+//       kanonicznością dla generatora/certyfikacji oraz bez ukrytych założeń
+//       9x9 / box_rows == box_cols.
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
@@ -28,10 +29,6 @@ inline bool is_subset_cell_candidate(uint64_t mask, int subset) {
     return bits >= 2 && bits <= subset;
 }
 
-inline int bit_index_from_mask(uint64_t bit) {
-    return static_cast<int>(std::countr_zero(bit));
-}
-
 inline void mark_subset_usage(GenericLogicCertifyResult& r, int subset, bool hidden) {
     if (!hidden && subset == 2) r.used_naked_pair = true;
     if (!hidden && subset == 3) r.used_naked_triple = true;
@@ -41,18 +38,23 @@ inline void mark_subset_usage(GenericLogicCertifyResult& r, int subset, bool hid
     if (hidden && subset == 4) r.used_hidden_quad = true;
 }
 
-inline bool any_other_cell_in_house_has_only_union_digits(
-    CandidateState& st,
+inline bool other_cell_creates_smaller_naked_subset(
+    const CandidateState& st,
     const int* house_cells,
     int house_len,
-    uint64_t chosen_mask,
-    uint64_t union_mask) {
+    uint64_t chosen_house_mask,
+    uint64_t union_mask,
+    int subset) {
+
+    if (subset <= 2) {
+        return false;
+    }
 
     for (int i = 0; i < house_len; ++i) {
-        const int idx = house_cells[i];
-        if (((chosen_mask >> i) & 1ULL) != 0ULL) {
+        if (((chosen_house_mask >> i) & 1ULL) != 0ULL) {
             continue;
         }
+        const int idx = house_cells[i];
         if (st.board->values[idx] != 0) {
             continue;
         }
@@ -60,7 +62,13 @@ inline bool any_other_cell_in_house_has_only_union_digits(
         if (cm == 0ULL) {
             continue;
         }
-        if ((cm & ~union_mask) == 0ULL && (cm & union_mask) != 0ULL) {
+        const uint64_t inside = cm & union_mask;
+        if (inside == 0ULL) {
+            continue;
+        }
+        if ((cm & ~union_mask) == 0ULL) {
+            // Ta komórka jest w pełni zawarta w unii subsetu, więc większy
+            // triple/quad jest zwykle niekanoniczny lub rozlany.
             return true;
         }
     }
@@ -81,8 +89,8 @@ inline bool hidden_subset_is_canonical(
         return false;
     }
 
-    // Każda cyfra musi występować co najmniej 2 razy, inaczej to zdegenerowany
-    // hidden single albo artefakt certyfikacji.
+    // Każda cyfra musi występować co najmniej 2 razy i nie więcej niż subset.
+    // W przeciwnym razie mamy hidden single albo układ niekanoniczny.
     for (int i = 0; i < subset; ++i) {
         const int d = digits[i];
         const int cnt = std::popcount(digit_pos[d]);
@@ -91,13 +99,51 @@ inline bool hidden_subset_is_canonical(
         }
     }
 
-    // Wariant kanoniczny: każda wybrana komórka musi uczestniczyć w co najmniej
-    // jednej z wybranych cyfr.
     uint64_t covered_cells = 0ULL;
     for (int i = 0; i < subset; ++i) {
         covered_cells |= digit_pos[digits[i]];
     }
-    return covered_cells == cell_union_mask;
+    if (covered_cells != cell_union_mask) {
+        return false;
+    }
+
+    return true;
+}
+
+inline bool hidden_subset_has_actual_restriction(
+    const CandidateState& st,
+    const int* house_cells,
+    uint64_t cell_union_mask,
+    uint64_t digit_union_mask) {
+
+    uint64_t tmp = cell_union_mask;
+    while (tmp != 0ULL) {
+        const int house_pos = static_cast<int>(std::countr_zero(tmp));
+        tmp &= (tmp - 1ULL);
+
+        const int idx = house_cells[house_pos];
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        const uint64_t kill = st.cands[idx] & ~digit_union_mask;
+        if (kill != 0ULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool house_has_enough_unsolved(const CandidateState& st, const int* house_cells, int house_len, int need) {
+    int unsolved = 0;
+    for (int i = 0; i < house_len; ++i) {
+        if (st.board->values[house_cells[i]] == 0) {
+            ++unsolved;
+            if (unsolved >= need) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace detail
@@ -135,20 +181,31 @@ inline ApplyResult apply_house_subset(
 
         int house_len = 0;
         for (int p = p0; p < p1; ++p) {
-            const int idx = st.topo->houses_flat[static_cast<size_t>(p)];
-            house_cells[house_len++] = idx;
+            house_cells[house_len++] = st.topo->houses_flat[static_cast<size_t>(p)];
+        }
+
+        if (house_len < subset) {
+            continue;
+        }
+        if (!detail::house_has_enough_unsolved(st, house_cells, house_len, subset)) {
+            continue;
         }
 
         if (!hidden) {
             int candidates[detail::kMaxN]{};
+            int candidate_pos[detail::kMaxN]{};
             int m = 0;
+
             for (int i = 0; i < house_len; ++i) {
                 const int idx = house_cells[i];
                 if (st.board->values[idx] != 0) {
                     continue;
                 }
-                if (detail::is_subset_cell_candidate(st.cands[idx], subset)) {
-                    candidates[m++] = idx;
+                const uint64_t cm = st.cands[idx];
+                if (detail::is_subset_cell_candidate(cm, subset)) {
+                    candidates[m] = idx;
+                    candidate_pos[m] = i;
+                    ++m;
                 }
             }
 
@@ -156,32 +213,38 @@ inline ApplyResult apply_house_subset(
                 continue;
             }
 
-            auto try_naked_combo = [&](const int* combo, int combo_size) -> ApplyResult {
+            auto try_naked_combo = [&](const int* combo_idx, const int* combo_pos, int combo_size) -> ApplyResult {
                 uint64_t union_mask = 0ULL;
                 uint64_t chosen_house_mask = 0ULL;
+
                 for (int i = 0; i < combo_size; ++i) {
-                    const int idx = combo[i];
-                    union_mask |= st.cands[idx];
-                    for (int j = 0; j < house_len; ++j) {
-                        if (house_cells[j] == idx) {
-                            chosen_house_mask |= (1ULL << j);
-                            break;
-                        }
-                    }
+                    union_mask |= st.cands[combo_idx[i]];
+                    chosen_house_mask |= (1ULL << combo_pos[i]);
                 }
 
                 if (std::popcount(union_mask) != subset) {
                     return ApplyResult::NoProgress;
                 }
 
-                // Kanoniczność: nie łap degeneracji, gdzie identyczna redukcja jest już
-                // trywialnym mniejszym subsetem albo nie ma nic do usunięcia.
-                if (combo_size > subset) {
+                if (detail::other_cell_creates_smaller_naked_subset(st, house_cells, house_len, chosen_house_mask, union_mask, subset)) {
                     return ApplyResult::NoProgress;
                 }
-                if (detail::any_other_cell_in_house_has_only_union_digits(st, house_cells, house_len, chosen_house_mask, union_mask) && subset >= 3) {
-                    // Dla triples/quads odrzucamy niekanoniczne rozlane układy, które nie
-                    // są zwarte i zwykle rozwalają certyfikację required-hit.
+
+                bool any_target = false;
+                for (int i = 0; i < house_len; ++i) {
+                    if (((chosen_house_mask >> i) & 1ULL) != 0ULL) {
+                        continue;
+                    }
+                    const int idx = house_cells[i];
+                    if (st.board->values[idx] != 0) {
+                        continue;
+                    }
+                    if ((st.cands[idx] & union_mask) != 0ULL) {
+                        any_target = true;
+                        break;
+                    }
+                }
+                if (!any_target) {
                     return ApplyResult::NoProgress;
                 }
 
@@ -216,10 +279,10 @@ inline ApplyResult apply_house_subset(
 
             if (subset == 2) {
                 for (int a = 0; a < m; ++a) {
-                    const int combo[2] = {candidates[a], 0};
                     for (int b = a + 1; b < m; ++b) {
-                        const int combo2[2] = {candidates[a], candidates[b]};
-                        const ApplyResult rr = try_naked_combo(combo2, 2);
+                        const int combo_idx[2] = {candidates[a], candidates[b]};
+                        const int combo_pos[2] = {candidate_pos[a], candidate_pos[b]};
+                        const ApplyResult rr = try_naked_combo(combo_idx, combo_pos, 2);
                         if (rr == ApplyResult::Contradiction) {
                             s.elapsed_ns += st.now_ns() - t0;
                             return rr;
@@ -230,8 +293,9 @@ inline ApplyResult apply_house_subset(
                 for (int a = 0; a < m; ++a) {
                     for (int b = a + 1; b < m; ++b) {
                         for (int c = b + 1; c < m; ++c) {
-                            const int combo[3] = {candidates[a], candidates[b], candidates[c]};
-                            const ApplyResult rr = try_naked_combo(combo, 3);
+                            const int combo_idx[3] = {candidates[a], candidates[b], candidates[c]};
+                            const int combo_pos[3] = {candidate_pos[a], candidate_pos[b], candidate_pos[c]};
+                            const ApplyResult rr = try_naked_combo(combo_idx, combo_pos, 3);
                             if (rr == ApplyResult::Contradiction) {
                                 s.elapsed_ns += st.now_ns() - t0;
                                 return rr;
@@ -244,8 +308,9 @@ inline ApplyResult apply_house_subset(
                     for (int b = a + 1; b < m; ++b) {
                         for (int c = b + 1; c < m; ++c) {
                             for (int d = c + 1; d < m; ++d) {
-                                const int combo[4] = {candidates[a], candidates[b], candidates[c], candidates[d]};
-                                const ApplyResult rr = try_naked_combo(combo, 4);
+                                const int combo_idx[4] = {candidates[a], candidates[b], candidates[c], candidates[d]};
+                                const int combo_pos[4] = {candidate_pos[a], candidate_pos[b], candidate_pos[c], candidate_pos[d]};
+                                const ApplyResult rr = try_naked_combo(combo_idx, combo_pos, 4);
                                 if (rr == ApplyResult::Contradiction) {
                                     s.elapsed_ns += st.now_ns() - t0;
                                     return rr;
@@ -260,9 +325,9 @@ inline ApplyResult apply_house_subset(
             int ad_count = 0;
 
             for (int d = 0; d < n; ++d) {
+                const uint64_t bit = (1ULL << d);
                 uint64_t pos_mask = 0ULL;
                 int cnt = 0;
-                const uint64_t bit = (1ULL << d);
                 bool already_placed = false;
 
                 for (int i = 0; i < house_len; ++i) {
@@ -301,11 +366,13 @@ inline ApplyResult apply_house_subset(
                 if (!detail::hidden_subset_is_canonical(digit_pos, digits, combo_size, cell_union_mask, digit_union_mask)) {
                     return ApplyResult::NoProgress;
                 }
+                if (!detail::hidden_subset_has_actual_restriction(st, house_cells, cell_union_mask, digit_union_mask)) {
+                    return ApplyResult::NoProgress;
+                }
 
                 bool local_progress = false;
                 uint64_t tmp = cell_union_mask;
                 while (tmp != 0ULL) {
-                    const uint64_t lsb = std::countr_zero(tmp) >= 64 ? 0ULL : (1ULL << std::countr_zero(tmp));
                     const int house_pos = static_cast<int>(std::countr_zero(tmp));
                     tmp &= (tmp - 1ULL);
 
@@ -318,6 +385,7 @@ inline ApplyResult apply_house_subset(
                     if (keep == 0ULL) {
                         return ApplyResult::Contradiction;
                     }
+
                     const uint64_t kill = st.cands[idx] & ~digit_union_mask;
                     if (kill == 0ULL) {
                         continue;
@@ -330,7 +398,6 @@ inline ApplyResult apply_house_subset(
                     if (rr == ApplyResult::Progress) {
                         local_progress = true;
                     }
-                    (void)lsb;
                 }
 
                 if (local_progress) {

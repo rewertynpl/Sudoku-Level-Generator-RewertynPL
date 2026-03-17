@@ -138,7 +138,6 @@ struct ClueRange {
 
 #include "auto_clue_policy.h"
 
-
 struct GenerateRunConfig {
     int box_rows = 3;
     int box_cols = 3;
@@ -206,6 +205,15 @@ struct GenerateRunConfig {
     bool print_clue_policy_debug = false;
     double goldilocks_generator_bias = 0.0;
     double goldilocks_certifier_bias = 0.0;
+
+    // Contract-stability controls for required named strategies (P1-P5 first).
+    bool dual_clue_policy_enforced = true;
+    bool prefer_required_named_first = true;
+    bool suppress_equivalent_generics_for_required = true;
+    bool preserve_required_pattern_anchors = true;
+    bool certifier_sparsify_for_required_named = true;
+    bool generator_dense_seed_for_required_named = true;
+    bool protect_required_pattern_from_singles = true;
 };
 
 struct GenerateRunResult {
@@ -216,6 +224,8 @@ struct GenerateRunResult {
     std::string measurement_profile = "strict-contract";
     int effective_min_clues = 0;
     int effective_max_clues = 0;
+    int effective_shared_min_clues = 0;
+    int effective_shared_max_clues = 0;
     int effective_generator_min_clues = 0;
     int effective_generator_max_clues = 0;
     int effective_certifier_min_clues = 0;
@@ -422,11 +432,15 @@ inline bool parse_required_strategy(std::string_view raw, RequiredStrategy& out)
     const std::string key = normalize_token(raw);
     if (key.empty() || key == "none") { out = RequiredStrategy::None; return true; }
 
-    static const std::array<std::pair<std::string_view, RequiredStrategy>, 63> map = {{
+    static const std::array<std::pair<std::string_view, RequiredStrategy>, 73> map = {{
         {"nakedsingle", RequiredStrategy::NakedSingle},
         {"hiddensingle", RequiredStrategy::HiddenSingle},
         {"pointingpairs", RequiredStrategy::PointingPairs},
+        {"pointingpair", RequiredStrategy::PointingPairs},
+        {"pointing", RequiredStrategy::PointingPairs},
         {"boxlinereduction", RequiredStrategy::BoxLineReduction},
+        {"boxline", RequiredStrategy::BoxLineReduction},
+        {"linereduction", RequiredStrategy::BoxLineReduction},
         {"nakedpair", RequiredStrategy::NakedPair},
         {"hiddenpair", RequiredStrategy::HiddenPair},
         {"nakedtriple", RequiredStrategy::NakedTriple},
@@ -435,21 +449,26 @@ inline bool parse_required_strategy(std::string_view raw, RequiredStrategy& out)
         {"hiddenquad", RequiredStrategy::HiddenQuad},
         {"xwing", RequiredStrategy::XWing},
         {"ywing", RequiredStrategy::YWing},
+        {"xywing", RequiredStrategy::YWing},
         {"skyscraper", RequiredStrategy::Skyscraper},
         {"twostringkite", RequiredStrategy::TwoStringKite},
         {"emptyrectangle", RequiredStrategy::EmptyRectangle},
         {"remotepairs", RequiredStrategy::RemotePairs},
         {"swordfish", RequiredStrategy::Swordfish},
         {"finnedxwingsashimi", RequiredStrategy::FinnedXWingSashimi},
+        {"finnedxwing", RequiredStrategy::FinnedXWingSashimi},
+        {"sashimixwing", RequiredStrategy::FinnedXWingSashimi},
         {"simplecoloring", RequiredStrategy::SimpleColoring},
         {"bugplusone", RequiredStrategy::BUGPlusOne},
         {"uniquerectangle", RequiredStrategy::UniqueRectangle},
+        {"urtype1", RequiredStrategy::UniqueRectangle},
         {"xyzwing", RequiredStrategy::XYZWing},
         {"wwing", RequiredStrategy::WWing},
         {"jellyfish", RequiredStrategy::Jellyfish},
         {"xchain", RequiredStrategy::XChain},
         {"xychain", RequiredStrategy::XYChain},
         {"wxyzwing", RequiredStrategy::WXYZWing},
+        {"alsxzwing", RequiredStrategy::WXYZWing},
         {"finnedswordfishjellyfish", RequiredStrategy::FinnedSwordfishJellyfish},
         {"alsxz", RequiredStrategy::ALSXZ},
         {"uniqueloop", RequiredStrategy::UniqueLoop},
@@ -461,6 +480,7 @@ inline bool parse_required_strategy(std::string_view raw, RequiredStrategy& out)
         {"bugtype3", RequiredStrategy::BUGType3},
         {"bugtype4", RequiredStrategy::BUGType4},
         {"borescoperqiudeadlypattern", RequiredStrategy::BorescoperQiuDeadlyPattern},
+        {"qiu", RequiredStrategy::BorescoperQiuDeadlyPattern},
         {"medusa3d", RequiredStrategy::Medusa3D},
         {"aic", RequiredStrategy::AIC},
         {"groupedaic", RequiredStrategy::GroupedAIC},
@@ -503,13 +523,6 @@ inline bool is_geometry_size_supported(int box_rows, int box_cols) {
     }
     const int n = box_rows * box_cols;
     return n >= 4 && n <= 64;
-}
-
-inline bool difficulty_level_selectable_for_geometry(int level, int box_rows, int box_cols) {
-    if (!is_geometry_size_supported(box_rows, box_cols)) {
-        return false;
-    }
-    return level >= 1 && level <= 8;
 }
 
 inline int strategy_min_level(RequiredStrategy rs) {
@@ -637,23 +650,35 @@ inline bool strategy_requires_exact_only(RequiredStrategy rs) {
     }
 }
 
-
-inline bool strategy_prefers_named_structures_before_generic(RequiredStrategy rs) {
+inline bool strategy_is_named_structure(RequiredStrategy rs) {
     switch (rs) {
-        case RequiredStrategy::ALSXZ:
-        case RequiredStrategy::ALSXYWing:
-        case RequiredStrategy::ALSChain:
-        case RequiredStrategy::ALSAIC:
-        case RequiredStrategy::WXYZWing:
+        case RequiredStrategy::PointingPairs:
+        case RequiredStrategy::BoxLineReduction:
+        case RequiredStrategy::XWing:
+        case RequiredStrategy::YWing:
+        case RequiredStrategy::Skyscraper:
+        case RequiredStrategy::TwoStringKite:
+        case RequiredStrategy::EmptyRectangle:
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::Swordfish:
+        case RequiredStrategy::FinnedXWingSashimi:
+        case RequiredStrategy::SimpleColoring:
+        case RequiredStrategy::BUGPlusOne:
+        case RequiredStrategy::UniqueRectangle:
+        case RequiredStrategy::XYZWing:
         case RequiredStrategy::WWing:
-        case RequiredStrategy::SueDeCoq:
-        case RequiredStrategy::DeathBlossom:
-        case RequiredStrategy::Exocet:
-        case RequiredStrategy::SeniorExocet:
-        case RequiredStrategy::SKLoop:
-        case RequiredStrategy::PatternOverlayMethod:
-        case RequiredStrategy::ForcingChains:
-        case RequiredStrategy::DynamicForcingChains:
+        case RequiredStrategy::Jellyfish:
+        case RequiredStrategy::WXYZWing:
+        case RequiredStrategy::FinnedSwordfishJellyfish:
+        case RequiredStrategy::ALSXZ:
+        case RequiredStrategy::UniqueLoop:
+        case RequiredStrategy::AvoidableRectangle:
+        case RequiredStrategy::BivalueOddagon:
+        case RequiredStrategy::UniqueRectangleExtended:
+        case RequiredStrategy::HiddenUniqueRectangle:
+        case RequiredStrategy::BUGType2:
+        case RequiredStrategy::BUGType3:
+        case RequiredStrategy::BUGType4:
         case RequiredStrategy::BorescoperQiuDeadlyPattern:
             return true;
         default:
@@ -661,21 +686,110 @@ inline bool strategy_prefers_named_structures_before_generic(RequiredStrategy rs
     }
 }
 
-inline bool strategy_suppress_equivalent_generic_families(RequiredStrategy rs) {
+inline bool strategy_is_generic_equivalence_family(RequiredStrategy rs) {
     switch (rs) {
+        case RequiredStrategy::XChain:
+        case RequiredStrategy::XYChain:
+        case RequiredStrategy::AIC:
+        case RequiredStrategy::GroupedAIC:
+        case RequiredStrategy::GroupedXCycle:
+        case RequiredStrategy::ContinuousNiceLoop:
+        case RequiredStrategy::ForcingChains:
+        case RequiredStrategy::DynamicForcingChains:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool strategy_prefers_named_structures_before_generic(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::PointingPairs:
+        case RequiredStrategy::BoxLineReduction:
+        case RequiredStrategy::YWing:
+        case RequiredStrategy::Skyscraper:
+        case RequiredStrategy::TwoStringKite:
+        case RequiredStrategy::EmptyRectangle:
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::Swordfish:
+        case RequiredStrategy::FinnedXWingSashimi:
+        case RequiredStrategy::SimpleColoring:
+        case RequiredStrategy::BUGPlusOne:
+        case RequiredStrategy::UniqueRectangle:
+        case RequiredStrategy::XYZWing:
+        case RequiredStrategy::WWing:
+        case RequiredStrategy::WXYZWing:
         case RequiredStrategy::ALSXZ:
+        case RequiredStrategy::UniqueLoop:
+        case RequiredStrategy::AvoidableRectangle:
+        case RequiredStrategy::BivalueOddagon:
+        case RequiredStrategy::UniqueRectangleExtended:
+        case RequiredStrategy::HiddenUniqueRectangle:
+        case RequiredStrategy::BUGType2:
+        case RequiredStrategy::BUGType3:
+        case RequiredStrategy::BUGType4:
+        case RequiredStrategy::BorescoperQiuDeadlyPattern:
         case RequiredStrategy::ALSXYWing:
         case RequiredStrategy::ALSChain:
         case RequiredStrategy::ALSAIC:
-        case RequiredStrategy::WXYZWing:
         case RequiredStrategy::SueDeCoq:
         case RequiredStrategy::DeathBlossom:
+        case RequiredStrategy::FrankenFish:
+        case RequiredStrategy::MutantFish:
+        case RequiredStrategy::KrakenFish:
+        case RequiredStrategy::Squirmbag:
+        case RequiredStrategy::MSLS:
         case RequiredStrategy::Exocet:
         case RequiredStrategy::SeniorExocet:
         case RequiredStrategy::SKLoop:
         case RequiredStrategy::PatternOverlayMethod:
-        case RequiredStrategy::ForcingChains:
-        case RequiredStrategy::DynamicForcingChains:
+            return true;
+        default:
+            return false; // Generics like AIC, ForcingChains, XYChain return false
+    }
+}
+
+inline bool strategy_suppress_equivalent_generic_families(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::PointingPairs:
+        case RequiredStrategy::BoxLineReduction:
+        case RequiredStrategy::YWing:
+        case RequiredStrategy::Skyscraper:
+        case RequiredStrategy::TwoStringKite:
+        case RequiredStrategy::EmptyRectangle:
+        case RequiredStrategy::RemotePairs:
+        case RequiredStrategy::Swordfish:
+        case RequiredStrategy::FinnedXWingSashimi:
+        case RequiredStrategy::SimpleColoring:
+        case RequiredStrategy::BUGPlusOne:
+        case RequiredStrategy::UniqueRectangle:
+        case RequiredStrategy::XYZWing:
+        case RequiredStrategy::WWing:
+        case RequiredStrategy::WXYZWing:
+        case RequiredStrategy::ALSXZ:
+        case RequiredStrategy::UniqueLoop:
+        case RequiredStrategy::AvoidableRectangle:
+        case RequiredStrategy::BivalueOddagon:
+        case RequiredStrategy::UniqueRectangleExtended:
+        case RequiredStrategy::HiddenUniqueRectangle:
+        case RequiredStrategy::BUGType2:
+        case RequiredStrategy::BUGType3:
+        case RequiredStrategy::BUGType4:
+        case RequiredStrategy::BorescoperQiuDeadlyPattern:
+        case RequiredStrategy::ALSXYWing:
+        case RequiredStrategy::ALSChain:
+        case RequiredStrategy::ALSAIC:
+        case RequiredStrategy::SueDeCoq:
+        case RequiredStrategy::DeathBlossom:
+        case RequiredStrategy::FrankenFish:
+        case RequiredStrategy::MutantFish:
+        case RequiredStrategy::KrakenFish:
+        case RequiredStrategy::Squirmbag:
+        case RequiredStrategy::MSLS:
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
             return true;
         default:
             return false;
@@ -684,29 +798,25 @@ inline bool strategy_suppress_equivalent_generic_families(RequiredStrategy rs) {
 
 inline bool strategy_prefers_generator_certifier_split(RequiredStrategy rs) {
     switch (rs) {
-        case RequiredStrategy::ALSXZ:
-        case RequiredStrategy::ALSXYWing:
-        case RequiredStrategy::ALSChain:
-        case RequiredStrategy::ALSAIC:
-        case RequiredStrategy::WXYZWing:
-        case RequiredStrategy::GroupedAIC:
-        case RequiredStrategy::GroupedXCycle:
-        case RequiredStrategy::ContinuousNiceLoop:
-        case RequiredStrategy::SueDeCoq:
-        case RequiredStrategy::DeathBlossom:
-        case RequiredStrategy::Exocet:
-        case RequiredStrategy::SeniorExocet:
-        case RequiredStrategy::SKLoop:
-        case RequiredStrategy::PatternOverlayMethod:
-        case RequiredStrategy::ForcingChains:
-        case RequiredStrategy::DynamicForcingChains:
-        case RequiredStrategy::FrankenFish:
-        case RequiredStrategy::MutantFish:
-        case RequiredStrategy::KrakenFish:
-        case RequiredStrategy::Squirmbag:
-            return true;
-        default:
+        case RequiredStrategy::None:
+        case RequiredStrategy::NakedSingle:
+        case RequiredStrategy::HiddenSingle:
+        case RequiredStrategy::Backtracking:
             return false;
+        default:
+            return true; // All Named and Advanced strategies strongly prefer dual clue windows!
+    }
+}
+
+inline bool strategy_prefers_dual_clue_windows(RequiredStrategy rs) {
+    switch (rs) {
+        case RequiredStrategy::None:
+        case RequiredStrategy::NakedSingle:
+        case RequiredStrategy::HiddenSingle:
+        case RequiredStrategy::Backtracking:
+            return false;
+        default:
+            return true; // Hard Split policy enabled for all P2+
     }
 }
 
@@ -750,7 +860,7 @@ inline bool strategy_requires_n_at_least_12(RequiredStrategy rs) {
         case RequiredStrategy::MSLS:
             return true;
         default:
-            return false;
+            return false; // Exocet, SKLoop, POM are allowed on N=9
     }
 }
 
@@ -785,20 +895,21 @@ inline bool required_strategy_selectable_for_geometry(RequiredStrategy rs, int b
     if (strategy_requires_n_at_least_12(rs) && n < 12) {
         return false;
     }
-    if (strategy_allows_3x3_theoretical_exact(rs) && n >= 9) {
-        return true;
-    }
     if ((rs == RequiredStrategy::GroupedAIC ||
          rs == RequiredStrategy::GroupedXCycle ||
          rs == RequiredStrategy::ContinuousNiceLoop ||
-         rs == RequiredStrategy::FrankenFish ||
-         rs == RequiredStrategy::MutantFish ||
-         rs == RequiredStrategy::KrakenFish ||
-         rs == RequiredStrategy::Squirmbag) &&
+         rs == RequiredStrategy::ALSAIC) &&
         n < 9) {
         return false;
     }
     return true;
+}
+
+inline bool difficulty_level_selectable_for_geometry(int level, int box_rows, int box_cols) {
+    if (!is_geometry_size_supported(box_rows, box_cols)) {
+        return false;
+    }
+    return level >= 1 && level <= 8;
 }
 
 inline double suggest_time_budget_s(int box_rows, int box_cols, int difficulty_level) {
@@ -806,7 +917,8 @@ inline double suggest_time_budget_s(int box_rows, int box_cols, int difficulty_l
     const int lvl = std::clamp(difficulty_level, 1, 8);
     const double base = 0.018 * static_cast<double>(n) * static_cast<double>(n);
     const double diff = 0.85 + static_cast<double>(lvl) * 0.55;
-    return std::clamp(base + diff, 1.0, 300.0);
+    const double mult = (lvl >= 7) ? 2.5 : 1.0;
+    return std::clamp((base + diff) * mult, 1.0, 360.0);
 }
 
 inline int strategy_adjusted_level(int difficulty_level, RequiredStrategy required) {
@@ -943,46 +1055,22 @@ inline bool strategy_prefers_sparse_p6_bottleneck_window(RequiredStrategy requir
     }
 }
 
-
-inline ClueRange resolve_auto_clue_range(
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required,
-    AutoClueWindowPolicy policy = AutoClueWindowPolicy::Shared) {
-
-    return resolve_auto_clue_range_goldilocks(
-        box_rows,
-        box_cols,
-        difficulty_level,
-        required,
-        policy);
+inline ClueRange resolve_auto_clue_range(int box_rows, int box_cols, int difficulty_level, RequiredStrategy required, AutoClueWindowPolicy policy = AutoClueWindowPolicy::Shared) {
+    return resolve_auto_clue_range_goldilocks(box_rows, box_cols, difficulty_level, required, policy);
 }
 
-inline ClueRange resolve_auto_clue_range_generator(
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required) {
-    return resolve_auto_clue_range(
-        box_rows,
-        box_cols,
-        difficulty_level,
-        required,
-        AutoClueWindowPolicy::Generator);
+inline ClueRange resolve_auto_clue_range_generator(int box_rows, int box_cols, int difficulty_level, RequiredStrategy required) {
+    const AutoClueWindowPolicy policy =
+        strategy_prefers_dual_clue_windows(required) ? AutoClueWindowPolicy::Generator
+                                                    : AutoClueWindowPolicy::Shared;
+    return resolve_auto_clue_range(box_rows, box_cols, difficulty_level, required, policy);
 }
 
-inline ClueRange resolve_auto_clue_range_certifier(
-    int box_rows,
-    int box_cols,
-    int difficulty_level,
-    RequiredStrategy required) {
-    return resolve_auto_clue_range(
-        box_rows,
-        box_cols,
-        difficulty_level,
-        required,
-        AutoClueWindowPolicy::Certifier);
+inline ClueRange resolve_auto_clue_range_certifier(int box_rows, int box_cols, int difficulty_level, RequiredStrategy required) {
+    const AutoClueWindowPolicy policy =
+        strategy_prefers_dual_clue_windows(required) ? AutoClueWindowPolicy::Certifier
+                                                    : AutoClueWindowPolicy::Shared;
+    return resolve_auto_clue_range(box_rows, box_cols, difficulty_level, required, policy);
 }
 
 inline uint64_t strategy_smoke_seed(RequiredStrategy rs, StrategySmokeVariant variant) {
@@ -996,15 +1084,16 @@ inline uint64_t strategy_smoke_attempt_cap(RequiredStrategy rs, StrategySmokeVar
     const int lvl = std::max(1, strategy_min_level(rs));
     uint64_t attempts = 32ULL;
 
-    if (lvl >= 8) attempts = 24000ULL;          // P8
-    else if (lvl >= 7) attempts = 16000ULL;     // P7
-    else if (lvl >= 6) attempts = 6000ULL;      // P6
-    else if (lvl >= 5) attempts = 512ULL;       // P5
-    else if (lvl >= 4) attempts = 128ULL;       // P4
-    else if (lvl >= 3) attempts = 96ULL;        // P3
-    else if (lvl >= 2) attempts = 64ULL;        // P2
+    if (lvl >= 8) attempts = 48000ULL;          // P8 Boosted for 3x3 Exocet
+    else if (lvl >= 7) attempts = 24000ULL;     // P7
+    else if (lvl >= 6) attempts = 12000ULL;     // P6
+    else if (lvl >= 5) attempts = 2400ULL;      // P5 exact/named patterns are brittle
+    else if (lvl >= 4) attempts = 384ULL;       // P4
+    else if (lvl >= 3) attempts = 192ULL;       // P3
+    else if (lvl >= 2) attempts = 128ULL;       // P2
+    else attempts = 96ULL;                      // P1 exact gate / intersections need retries
 
-    if (strategy_prefers_dense_search_budget(rs)) {
+    if (strategy_prefers_dense_search_budget(rs) || strategy_prefers_named_structures_before_generic(rs)) {
         attempts += attempts / 2ULL;
     }
     if (variant == StrategySmokeVariant::Asymmetric) {
@@ -1016,15 +1105,24 @@ inline uint64_t strategy_smoke_attempt_cap(RequiredStrategy rs, StrategySmokeVar
 inline uint64_t strategy_smoke_time_cap_s(RequiredStrategy rs) {
     const int lvl = std::max(1, strategy_min_level(rs));
     if (lvl >= 8) {
-        return strategy_prefers_dense_search_budget(rs) ? 300ULL : 240ULL;
+        return strategy_prefers_dense_search_budget(rs) ? 360ULL : 300ULL;
     }
     if (lvl >= 7) {
-        return strategy_prefers_dense_search_budget(rs) ? 240ULL : 180ULL;
+        return strategy_prefers_dense_search_budget(rs) ? 300ULL : 240ULL;
     }
     if (lvl >= 6) {
         return strategy_prefers_dense_search_budget(rs) ? 120ULL : 90ULL;
     }
-    return 20ULL;
+    if (lvl >= 5) {
+        return 90ULL;
+    }
+    if (lvl >= 4) {
+        return 60ULL;
+    }
+    if (lvl >= 3) {
+        return 45ULL;
+    }
+    return 33ULL;
 }
 
 inline bool strategy_smoke_relaxed_hit_allowed(RequiredStrategy rs) {
@@ -1109,7 +1207,7 @@ inline StrategySmokeProfile strategy_smoke_profile(
     profile.mcts_profile = (profile.difficulty >= 8) ? "p8" : ((profile.difficulty >= 7) ? "p7" : "auto");
     profile.strict_canonical = true;
     profile.allow_proxy_advanced = !strategy_suppress_equivalent_generic_families(rs);
-    profile.fast_test = (profile.difficulty < 7);
+    profile.fast_test = (profile.difficulty < 7) && !strategy_prefers_named_structures_before_generic(rs);
     profile.max_total_time_s = strategy_smoke_time_cap_s(rs);
     profile.max_attempts = strategy_smoke_attempt_cap(rs, variant);
     profile.min_required_use = strategy_smoke_min_required_use(rs);

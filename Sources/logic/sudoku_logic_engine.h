@@ -1,10 +1,11 @@
 // ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
-// ModuĹ‚: sudoku_logic_engine.h
-// Opis: Centralny dyspozytor logiki (Fasada). Deleguje testy Ĺ‚amigĹ‚Ăłwki 
-//       do poszczegĂłlnych moduĹ‚Ăłw. ĹÄ…czy nowÄ…, rozbitÄ… architekturÄ™ w caĹ‚oĹ›Ä‡.
-//       Gwarantuje wywoĹ‚ania strategii od Poziomu 1 (Easy) do Poziomu 8 
-//       (Theoretical) bez ominiÄ™cia ĹĽadnego wariantu. Zero-Allocation.
+// Moduł: sudoku_logic_engine.h
+// Opis: Centralny dyspozytor logiki (Fasada). Deleguje testy łamigłówki 
+//       do poszczególnych modułów. Łączy nową, rozbitą architekturę w całość.
+//       Gwarantuje wywołania strategii od Poziomu 1 (Easy) do Poziomu 8 
+//       (Theoretical) bez pominięcia żadnego wariantu. Zero-Allocation.
+//       Przebudowany rygorystyczny Dispatch Order ("Named Structures First").
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
@@ -25,7 +26,7 @@
 #include "shared/required_strategy_gate.h"
 
 // ============================================================================
-// DOĹÄ„CZENIE WSZYSTKICH SPECJALISTYCZNYCH MODUĹĂ“W (P1 - P8)
+// DOŁĄCZENIE WSZYSTKICH SPECJALISTYCZNYCH MODUŁÓW (P1 - P8)
 // ============================================================================
 #include "p1_easy/naked_hidden_single.h"
 #include "p2_intersections/intersections.h"
@@ -43,7 +44,7 @@
 #include "p6_diabolical/chains_basic.h"
 #include "p6_diabolical/wxyz_wing.h"
 #include "p6_diabolical/als_xz.h"
-#include "p6_diabolical/unique_loop_avoidable_oddagon.h" // Nowe uzupeĹ‚nienia
+#include "p6_diabolical/unique_loop_avoidable_oddagon.h" // Nowe uzupełnienia
 #include "p6_diabolical/ur_extended.h"
 #include "p6_diabolical/bug_variants.h"
 #include "p6_diabolical/borescoper_qiu.h"
@@ -240,103 +241,103 @@ struct GenericLogicCertify {
             {"HiddenTriple", 2, StrategyImplTier::Full, true, 64, "P2.HiddenTriple",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"NakedQuad", 4, StrategyImplTier::Full, true, 64, "P3.NakedQuad",
+            {"NakedQuad", 3, StrategyImplTier::Full, true, 64, "P3.NakedQuad",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"HiddenQuad", 4, StrategyImplTier::Full, true, 64, "P3.HiddenQuad",
+            {"HiddenQuad", 3, StrategyImplTier::Full, true, 64, "P3.HiddenQuad",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"XWing", 4, StrategyImplTier::Full, true, 64, "P3.XWing",
+            {"XWing", 3, StrategyImplTier::Full, true, 64, "P3.XWing",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"YWing", 4, StrategyImplTier::Full, true, 64, "P3.YWing",
+            {"YWing", 3, StrategyImplTier::Full, true, 64, "P3.YWing",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"Skyscraper", 4, StrategyImplTier::Full, true, 64, "P3.Skyscraper",
+            {"Skyscraper", 3, StrategyImplTier::Full, true, 64, "P3.Skyscraper",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"TwoStringKite", 4, StrategyImplTier::Full, true, 64, "P3.TwoStringKite",
+            {"TwoStringKite", 3, StrategyImplTier::Full, true, 64, "P3.TwoStringKite",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"EmptyRectangle", 4, StrategyImplTier::Full, true, 64, "P3.EmptyRectangle",
+            {"EmptyRectangle", 3, StrategyImplTier::Full, true, 64, "P3.EmptyRectangle",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"RemotePairs", 4, StrategyImplTier::Full, true, 64, "P3.RemotePairs",
+            {"RemotePairs", 3, StrategyImplTier::Full, true, 64, "P3.RemotePairs",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"Swordfish", 5, StrategyImplTier::Full, true, 64, "P4.Swordfish",
+            {"Swordfish", 4, StrategyImplTier::Full, true, 64, "P4.Swordfish",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"FinnedXWingSashimi", 5, StrategyImplTier::Full, true, 64, "P4.FinnedXWingSashimi",
+            {"FinnedXWingSashimi", 4, StrategyImplTier::Full, true, 64, "P4.FinnedXWingSashimi",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"SimpleColoring", 5, StrategyImplTier::Full, true, 64, "P4.SimpleColoring",
+            {"SimpleColoring", 4, StrategyImplTier::Full, true, 64, "P4.SimpleColoring",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"BUGPlusOne", 5, StrategyImplTier::Full, true, 64, "P4.BUGPlusOne",
+            {"BUGPlusOne", 4, StrategyImplTier::Full, true, 64, "P4.BUGPlusOne",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"UniqueRectangle", 5, StrategyImplTier::Full, true, 64, "P4.UniqueRectangle",
+            {"UniqueRectangle", 4, StrategyImplTier::Full, true, 64, "P4.UniqueRectangle",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"XYZWing", 5, StrategyImplTier::Full, true, 64, "P4.XYZWing",
+            {"XYZWing", 4, StrategyImplTier::Full, true, 64, "P4.XYZWing",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"WWing", 5, StrategyImplTier::Full, true, 64, "P4.WWing",
+            {"WWing", 4, StrategyImplTier::Full, true, 64, "P4.WWing",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"Jellyfish", 6, StrategyImplTier::Full, true, 64, "P5.Jellyfish",
+            {"Jellyfish", 5, StrategyImplTier::Full, true, 64, "P5.Jellyfish",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"XChain", 6, StrategyImplTier::Full, true, 64, "P5.XChain",
+            {"XChain", 5, StrategyImplTier::Full, true, 64, "P5.XChain",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"XYChain", 6, StrategyImplTier::Full, true, 64, "P5.XYChain",
+            {"XYChain", 5, StrategyImplTier::Full, true, 64, "P5.XYChain",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"WXYZWing", 6, StrategyImplTier::Full, true, 64, "P5.WXYZWing",
+            {"WXYZWing", 5, StrategyImplTier::Full, true, 64, "P5.WXYZWing",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"FinnedSwordfishJellyfish", 6, StrategyImplTier::Full, true, 64, "P5.FinnedSwordfishJellyfish",
+            {"FinnedSwordfishJellyfish", 5, StrategyImplTier::Full, true, 64, "P5.FinnedSwordfishJellyfish",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ALSXZ", 6, StrategyImplTier::Full, true, 64, "P5.ALSXZ",
+            {"ALSXZ", 5, StrategyImplTier::Full, true, 64, "P5.ALSXZ",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"UniqueLoop", 6, StrategyImplTier::Full, true, 64, "P5.UniqueLoop",
+            {"UniqueLoop", 5, StrategyImplTier::Full, true, 64, "P5.UniqueLoop",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"AvoidableRectangle", 6, StrategyImplTier::Full, true, 64, "P5.AvoidableRectangle",
+            {"AvoidableRectangle", 5, StrategyImplTier::Full, true, 64, "P5.AvoidableRectangle",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"BivalueOddagon", 6, StrategyImplTier::Full, true, 64, "P5.BivalueOddagon",
+            {"BivalueOddagon", 5, StrategyImplTier::Full, true, 64, "P5.BivalueOddagon",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"Medusa3D", 7, StrategyImplTier::Full, true, 64, "P6.Medusa3D",
+            {"Medusa3D", 6, StrategyImplTier::Full, true, 64, "P6.Medusa3D",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"AIC", 7, StrategyImplTier::Full, true, 64, "P6.AIC",
+            {"AIC", 6, StrategyImplTier::Full, true, 64, "P6.AIC",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"GroupedAIC", 7, StrategyImplTier::Full, true, 64, "P6.GroupedAIC",
+            {"GroupedAIC", 6, StrategyImplTier::Full, true, 64, "P6.GroupedAIC",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"GroupedXCycle", 7, StrategyImplTier::Full, true, 64, "P6.GroupedXCycle",
+            {"GroupedXCycle", 6, StrategyImplTier::Full, true, 64, "P6.GroupedXCycle",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ContinuousNiceLoop", 7, StrategyImplTier::Full, true, 64, "P6.ContinuousNiceLoop",
+            {"ContinuousNiceLoop", 6, StrategyImplTier::Full, true, 64, "P6.ContinuousNiceLoop",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ALSXYWing", 7, StrategyImplTier::Full, true, 64, "P6.ALSXYWing",
+            {"ALSXYWing", 6, StrategyImplTier::Full, true, 64, "P6.ALSXYWing",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ALSChain", 7, StrategyImplTier::Full, true, 64, "P6.ALSChain",
+            {"ALSChain", 6, StrategyImplTier::Full, true, 64, "P6.ALSChain",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"SueDeCoq", 7, StrategyImplTier::Full, true, 64, "P6.SueDeCoq",
+            {"SueDeCoq", 6, StrategyImplTier::Full, true, 64, "P6.SueDeCoq",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"DeathBlossom", 7, StrategyImplTier::Full, true, 64, "P6.DeathBlossom",
+            {"DeathBlossom", 6, StrategyImplTier::Full, true, 64, "P6.DeathBlossom",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
             {"FrankenFish", 7, StrategyImplTier::Full, true, 64, "P6.FrankenFish",
@@ -363,7 +364,7 @@ struct GenericLogicCertify {
             {"PatternOverlayMethod", 8, StrategyImplTier::Full, true, 64, "P7.PatternOverlay",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ForcingChains", 8, StrategyImplTier::Full, true, 64, "P7.ForcingChains",
+            {"ForcingChains", 7, StrategyImplTier::Full, true, 64, "P7.ForcingChains",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
             {"Squirmbag", 7, StrategyImplTier::Full, true, 64, "P6.Squirmbag",
@@ -375,13 +376,13 @@ struct GenericLogicCertify {
             {"HiddenUR", 6, StrategyImplTier::Full, true, 64, "P5.HiddenUR",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"BUGType2", 6, StrategyImplTier::Full, true, 64, "P5.BUGType2",
+            {"BUGType2", 5, StrategyImplTier::Full, true, 64, "P5.BUGType2",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"BUGType3", 6, StrategyImplTier::Full, true, 64, "P5.BUGType3",
+            {"BUGType3", 5, StrategyImplTier::Full, true, 64, "P5.BUGType3",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
-            {"BUGType4", 6, StrategyImplTier::Full, true, 64, "P5.BUGType4",
+            {"BUGType4", 5, StrategyImplTier::Full, true, 64, "P5.BUGType4",
                 StrategyCoverageGrade::TextbookFull, PatternGeneratorPolicy::ExactPreferredFamilyFallback,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Keep, true},
             {"BorescoperQiuDeadlyPattern", 6, StrategyImplTier::Full, true, 64, "P5.BorescoperQiu",
@@ -393,10 +394,10 @@ struct GenericLogicCertify {
             {"AlignedTripleExclusion", 7, StrategyImplTier::Full, true, 64, "P6.AlignedTripleExclusion",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"ALSAIC", 7, StrategyImplTier::Full, true, 64, "P6.ALSAIC",
+            {"ALSAIC", 6, StrategyImplTier::Full, true, 64, "P6.ALSAIC",
                 StrategyCoverageGrade::FamilyApprox, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
-            {"DynamicForcingChains", 8, StrategyImplTier::Full, true, 64, "P7.DynamicForcingChains",
+            {"DynamicForcingChains", 7, StrategyImplTier::Full, true, 64, "P7.DynamicForcingChains",
                 StrategyCoverageGrade::Partial, PatternGeneratorPolicy::ExactRequired,
                 StrategyZeroAllocGrade::HotpathZeroAllocOk, StrategyAuditDecision::Tighten, true},
         }};
@@ -680,6 +681,147 @@ struct GenericLogicCertify {
         return false;
     }
 
+    static bool slot_enabled_for_dispatch(size_t slot, int max_level) {
+        if (max_level <= 0) return false;
+        switch (slot) {
+            case SlotNakedSingle:
+            case SlotHiddenSingle:
+                return max_level >= 1;
+            case SlotPointingPairs:
+            case SlotBoxLineReduction:
+            case SlotNakedPair:
+            case SlotHiddenPair:
+            case SlotNakedTriple:
+            case SlotHiddenTriple:
+                return max_level >= 2;
+            case SlotNakedQuad:
+            case SlotHiddenQuad:
+            case SlotXWing:
+            case SlotYWing:
+            case SlotSkyscraper:
+            case SlotTwoStringKite:
+            case SlotEmptyRectangle:
+            case SlotRemotePairs:
+                return max_level >= 3;
+            case SlotSwordfish:
+            case SlotFinnedXWingSashimi:
+            case SlotSimpleColoring:
+            case SlotBUGPlusOne:
+            case SlotUniqueRectangle:
+            case SlotXYZWing:
+            case SlotWWing:
+                return max_level >= 4;
+            case SlotJellyfish:
+            case SlotXChain:
+            case SlotXYChain:
+            case SlotWXYZWing:
+            case SlotFinnedSwordfishJellyfish:
+            case SlotALSXZ:
+            case SlotUniqueLoop:
+            case SlotAvoidableRectangle:
+            case SlotBivalueOddagon:
+            case SlotURExtended:
+            case SlotHiddenUR:
+            case SlotBUGType2:
+            case SlotBUGType3:
+            case SlotBUGType4:
+            case SlotBorescoperQiuDeadlyPattern:
+                return max_level >= 5;
+            case SlotMedusa3D:
+            case SlotAIC:
+            case SlotGroupedAIC:
+            case SlotGroupedXCycle:
+            case SlotContinuousNiceLoop:
+            case SlotALSXYWing:
+            case SlotALSChain:
+            case SlotSueDeCoq:
+            case SlotDeathBlossom:
+            case SlotFrankenFish:
+            case SlotMutantFish:
+            case SlotKrakenFish:
+            case SlotSquirmbag:
+            case SlotAlignedPairExclusion:
+            case SlotAlignedTripleExclusion:
+            case SlotALSAIC:
+                return max_level >= 6;
+            case SlotMSLS:
+            case SlotExocet:
+            case SlotSeniorExocet:
+            case SlotSKLoop:
+            case SlotPatternOverlayMethod:
+            case SlotForcingChains:
+            case SlotDynamicForcingChains:
+                return max_level >= 7;
+        }
+        return false;
+    }
+
+    static ApplyResult apply_strategy_slot(CandidateState& st, GenericLogicCertifyResult& result, size_t slot) {
+        switch (slot) {
+            case SlotNakedSingle: return p1_easy::apply_naked_single(st, result.strategy_stats[SlotNakedSingle], result);
+            case SlotHiddenSingle: return p1_easy::apply_hidden_single(st, result.strategy_stats[SlotHiddenSingle], result);
+            case SlotPointingPairs: return p2_intersections::apply_pointing_pairs(st, result.strategy_stats[SlotPointingPairs], result);
+            case SlotBoxLineReduction: return p2_intersections::apply_box_line_reduction(st, result.strategy_stats[SlotBoxLineReduction], result);
+            case SlotNakedPair: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedPair], result, 2, false);
+            case SlotHiddenPair: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenPair], result, 2, true);
+            case SlotNakedTriple: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedTriple], result, 3, false);
+            case SlotHiddenTriple: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenTriple], result, 3, true);
+            case SlotNakedQuad: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedQuad], result, 4, false);
+            case SlotHiddenQuad: return p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenQuad], result, 4, true);
+            case SlotXWing: return p4_hard::apply_x_wing(st, result.strategy_stats[SlotXWing], result);
+            case SlotYWing: return p4_hard::apply_y_wing(st, result.strategy_stats[SlotYWing], result);
+            case SlotSkyscraper: return p4_hard::apply_skyscraper(st, result.strategy_stats[SlotSkyscraper], result);
+            case SlotTwoStringKite: return p4_hard::apply_two_string_kite(st, result.strategy_stats[SlotTwoStringKite], result);
+            case SlotEmptyRectangle: return p4_hard::apply_empty_rectangle(st, result.strategy_stats[SlotEmptyRectangle], result);
+            case SlotRemotePairs: return p4_hard::apply_remote_pairs(st, result.strategy_stats[SlotRemotePairs], result);
+            case SlotSwordfish: return p4_hard::apply_swordfish(st, result.strategy_stats[SlotSwordfish], result);
+            case SlotFinnedXWingSashimi: return p5_expert::apply_finned_x_wing_sashimi(st, result.strategy_stats[SlotFinnedXWingSashimi], result);
+            case SlotSimpleColoring: return p5_expert::apply_simple_coloring(st, result.strategy_stats[SlotSimpleColoring], result);
+            case SlotBUGPlusOne: return p5_expert::apply_bug_plus_one(st, result.strategy_stats[SlotBUGPlusOne], result);
+            case SlotUniqueRectangle: return p5_expert::apply_unique_rectangle(st, result.strategy_stats[SlotUniqueRectangle], result);
+            case SlotXYZWing: return p5_expert::apply_xyz_wing(st, result.strategy_stats[SlotXYZWing], result);
+            case SlotWWing: return p5_expert::apply_w_wing(st, result.strategy_stats[SlotWWing], result);
+            case SlotJellyfish: return p6_diabolical::apply_jellyfish(st, result.strategy_stats[SlotJellyfish], result);
+            case SlotXChain: return p6_diabolical::apply_x_chain(st, result.strategy_stats[SlotXChain], result);
+            case SlotXYChain: return p6_diabolical::apply_xy_chain(st, result.strategy_stats[SlotXYChain], result);
+            case SlotWXYZWing: return p6_diabolical::apply_wxyz_wing(st, result.strategy_stats[SlotWXYZWing], result);
+            case SlotFinnedSwordfishJellyfish: return p6_diabolical::apply_finned_swordfish_jellyfish(st, result.strategy_stats[SlotFinnedSwordfishJellyfish], result);
+            case SlotALSXZ: return p6_diabolical::apply_als_xz(st, result.strategy_stats[SlotALSXZ], result);
+            case SlotUniqueLoop: return p6_diabolical::apply_unique_loop(st, result.strategy_stats[SlotUniqueLoop], result);
+            case SlotAvoidableRectangle: return p6_diabolical::apply_avoidable_rectangle(st, result.strategy_stats[SlotAvoidableRectangle], result);
+            case SlotBivalueOddagon: return p6_diabolical::apply_bivalue_oddagon(st, result.strategy_stats[SlotBivalueOddagon], result);
+            case SlotMedusa3D: return p7_nightmare::apply_medusa_3d(st, result.strategy_stats[SlotMedusa3D], result);
+            case SlotAIC: return p7_nightmare::apply_aic(st, result.strategy_stats[SlotAIC], result);
+            case SlotGroupedAIC: return p7_nightmare::apply_grouped_aic(st, result.strategy_stats[SlotGroupedAIC], result);
+            case SlotGroupedXCycle: return p7_nightmare::apply_grouped_x_cycle(st, result.strategy_stats[SlotGroupedXCycle], result);
+            case SlotContinuousNiceLoop: return p7_nightmare::apply_continuous_nice_loop(st, result.strategy_stats[SlotContinuousNiceLoop], result);
+            case SlotALSXYWing: return p7_nightmare::apply_als_xy_wing(st, result.strategy_stats[SlotALSXYWing], result);
+            case SlotALSChain: return p7_nightmare::apply_als_chain(st, result.strategy_stats[SlotALSChain], result);
+            case SlotSueDeCoq: return p7_nightmare::apply_sue_de_coq(st, result.strategy_stats[SlotSueDeCoq], result);
+            case SlotDeathBlossom: return p7_nightmare::apply_death_blossom(st, result.strategy_stats[SlotDeathBlossom], result);
+            case SlotFrankenFish: return p7_nightmare::apply_franken_fish(st, result.strategy_stats[SlotFrankenFish], result);
+            case SlotMutantFish: return p7_nightmare::apply_mutant_fish(st, result.strategy_stats[SlotMutantFish], result);
+            case SlotKrakenFish: return p7_nightmare::apply_kraken_fish(st, result.strategy_stats[SlotKrakenFish], result);
+            case SlotMSLS: return p8_theoretical::apply_msls(st, result.strategy_stats[SlotMSLS], result);
+            case SlotExocet: return p8_theoretical::apply_exocet(st, result.strategy_stats[SlotExocet], result);
+            case SlotSeniorExocet: return p8_theoretical::apply_senior_exocet(st, result.strategy_stats[SlotSeniorExocet], result);
+            case SlotSKLoop: return p8_theoretical::apply_sk_loop(st, result.strategy_stats[SlotSKLoop], result);
+            case SlotPatternOverlayMethod: return p8_theoretical::apply_pattern_overlay_method(st, result.strategy_stats[SlotPatternOverlayMethod], result);
+            case SlotForcingChains: return p8_theoretical::apply_forcing_chains(st, result.strategy_stats[SlotForcingChains], result);
+            case SlotSquirmbag: return p7_nightmare::apply_squirmbag(st, result.strategy_stats[SlotSquirmbag], result);
+            case SlotURExtended: return p6_diabolical::apply_ur_extended(st, result.strategy_stats[SlotURExtended], result);
+            case SlotHiddenUR: return p6_diabolical::apply_hidden_ur(st, result.strategy_stats[SlotHiddenUR], result);
+            case SlotBUGType2: return p6_diabolical::apply_bug_type2(st, result.strategy_stats[SlotBUGType2], result);
+            case SlotBUGType3: return p6_diabolical::apply_bug_type3(st, result.strategy_stats[SlotBUGType3], result);
+            case SlotBUGType4: return p6_diabolical::apply_bug_type4(st, result.strategy_stats[SlotBUGType4], result);
+            case SlotBorescoperQiuDeadlyPattern: return p6_diabolical::apply_borescoper_qiu_deadly_pattern(st, result.strategy_stats[SlotBorescoperQiuDeadlyPattern], result);
+            case SlotAlignedPairExclusion: return p7_nightmare::apply_aligned_pair_exclusion(st, result.strategy_stats[SlotAlignedPairExclusion], result);
+            case SlotAlignedTripleExclusion: return p7_nightmare::apply_aligned_triple_exclusion(st, result.strategy_stats[SlotAlignedTripleExclusion], result);
+            case SlotALSAIC: return p7_nightmare::apply_als_aic(st, result.strategy_stats[SlotALSAIC], result);
+            case SlotDynamicForcingChains: return p8_theoretical::apply_dynamic_forcing_chains(st, result.strategy_stats[SlotDynamicForcingChains], result);
+        }
+        return ApplyResult::NoProgress;
+    }
 
 private:
     static bool suppress_slot_in_required_corridor(size_t slot) {
@@ -693,41 +835,17 @@ private:
             return false;
         }
 
+        // Tłumi generyczne rodziny (Generic Equivalence Families) w momencie 
+        // wymuszania specyficznych (Named) struktur przez generator. Zapobiega kradzieży USE.
+        if (required_generic_family_suppression_active() && strategy_is_generic_equivalence_family(slot_rs)) {
+            return true;
+        }
+
         switch (rs) {
-        case RequiredStrategy::ALSXZ:
-            return slot_rs == RequiredStrategy::XYChain ||
-                   slot_rs == RequiredStrategy::XChain ||
-                   slot_rs == RequiredStrategy::AIC ||
-                   slot_rs == RequiredStrategy::GroupedAIC ||
-                   slot_rs == RequiredStrategy::ALSAIC;
-        case RequiredStrategy::ALSXYWing:
-            return slot_rs == RequiredStrategy::AIC ||
-                   slot_rs == RequiredStrategy::GroupedAIC ||
-                   slot_rs == RequiredStrategy::ALSAIC ||
-                   slot_rs == RequiredStrategy::ALSChain;
-        case RequiredStrategy::ALSChain:
-            return slot_rs == RequiredStrategy::AIC ||
-                   slot_rs == RequiredStrategy::GroupedAIC ||
-                   slot_rs == RequiredStrategy::ALSAIC;
         case RequiredStrategy::FinnedSwordfishJellyfish:
             return slot_rs == RequiredStrategy::Swordfish ||
                    slot_rs == RequiredStrategy::Jellyfish ||
                    slot_rs == RequiredStrategy::FinnedXWingSashimi;
-        case RequiredStrategy::Exocet:
-        case RequiredStrategy::SeniorExocet:
-        case RequiredStrategy::SKLoop:
-        case RequiredStrategy::PatternOverlayMethod:
-            return slot_rs == RequiredStrategy::ForcingChains ||
-                   slot_rs == RequiredStrategy::DynamicForcingChains;
-        case RequiredStrategy::WXYZWing:
-            return slot_rs == RequiredStrategy::XYChain ||
-                   slot_rs == RequiredStrategy::XChain ||
-                   slot_rs == RequiredStrategy::AIC;
-        case RequiredStrategy::SueDeCoq:
-        case RequiredStrategy::DeathBlossom:
-            return slot_rs == RequiredStrategy::AIC ||
-                   slot_rs == RequiredStrategy::GroupedAIC ||
-                   slot_rs == RequiredStrategy::ALSAIC;
         default:
             return false;
         }
@@ -750,184 +868,151 @@ private:
 
     // GŁÓWNA PĘTLA CERTYFIKATORA LOGICZNEGO
     static ApplyResult apply_round_up_to_level(CandidateState& st, GenericLogicCertifyResult& result, int max_level) {
+        using namespace shared;
 
-        
-        // ====================================================================
-        // POZIOM 1: EASY
-        // ====================================================================
-        ApplyResult ar = p1_easy::apply_naked_single(st, result.strategy_stats[SlotNakedSingle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotNakedSingle, ar); return ar; }
-        ar = p1_easy::apply_hidden_single(st, result.strategy_stats[SlotHiddenSingle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotHiddenSingle, ar); return ar; }
-        
-        if (max_level <= 1) return ApplyResult::NoProgress;
+        const RequiredStrategy active_required = current_required_exact_strategy();
+        size_t required_slot = kStrategySlotCount;
+        const bool has_required_slot =
+            slot_from_required_strategy(active_required, required_slot) &&
+            slot_enabled_for_dispatch(required_slot, max_level);
 
-        // ====================================================================
-        // POZIOM 2: MEDIUM
-        // ====================================================================
-        ar = p2_intersections::apply_pointing_and_boxline(st, result.strategy_stats[SlotPointingPairs], result.strategy_stats[SlotBoxLineReduction], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotPointingPairs, ar); return ar; }
-        
-        // Zgodnie z oficjalnÄ… klasyfikacjÄ…: Podzbiory 2, 3 elementowe wchodzÄ… tu jako medium
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedPair], result, 2, false);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotNakedPair, ar); return ar; }
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenPair], result, 2, true);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotHiddenPair, ar); return ar; }
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedTriple], result, 3, false);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotNakedTriple, ar); return ar; }
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenTriple], result, 3, true);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotHiddenTriple, ar); return ar; }
+        auto try_slot = [&](size_t slot, bool honor_required_corridor = true) -> ApplyResult {
+            if (!slot_enabled_for_dispatch(slot, max_level)) {
+                return ApplyResult::NoProgress;
+            }
+            if (has_required_slot && slot == required_slot) {
+                return ApplyResult::NoProgress;
+            }
+            if (honor_required_corridor && suppress_slot_in_required_corridor(slot)) {
+                return ApplyResult::NoProgress;
+            }
+            const ApplyResult ar = apply_strategy_slot(st, result, slot);
+            if (ar != ApplyResult::NoProgress) {
+                note_strategy_slot(result, slot, ar);
+            }
+            return ar;
+        };
 
-        if (max_level <= 2) return ApplyResult::NoProgress;
-
-        // ====================================================================
-        // POZIOM 3/4: HARD / EXPERT (Wg wytycznych poĹ‚Ä…czone jako P3/P4 w silniku)
-        // ====================================================================
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotNakedQuad], result, 4, false);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotNakedQuad, ar); return ar; }
-        ar = p3_subsets::apply_house_subset(st, result.strategy_stats[SlotHiddenQuad], result, 4, true);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotHiddenQuad, ar); return ar; }
-        
-        ar = p4_hard::apply_x_wing(st, result.strategy_stats[SlotXWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXWing, ar); return ar; }
-        ar = p4_hard::apply_y_wing(st, result.strategy_stats[SlotYWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotYWing, ar); return ar; }
-        ar = p4_hard::apply_skyscraper(st, result.strategy_stats[SlotSkyscraper], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSkyscraper, ar); return ar; }
-        ar = p4_hard::apply_two_string_kite(st, result.strategy_stats[SlotTwoStringKite], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotTwoStringKite, ar); return ar; }
-        ar = p4_hard::apply_empty_rectangle(st, result.strategy_stats[SlotEmptyRectangle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotEmptyRectangle, ar); return ar; }
-        ar = p4_hard::apply_remote_pairs(st, result.strategy_stats[SlotRemotePairs], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotRemotePairs, ar); return ar; }
-        
-        if (max_level <= 4) return ApplyResult::NoProgress;
+        // Zawsze pozwalamy wymaganej strategii ocenić planszę pierwsza, pod warunkiem, 
+        // że jest to "Named Structure" / "Exact Template".
+        if (has_required_slot) {
+            const ApplyResult ar = apply_strategy_slot(st, result, required_slot);
+            if (ar != ApplyResult::NoProgress) {
+                note_strategy_slot(result, required_slot, ar);
+                return ar;
+            }
+        }
 
         // ====================================================================
-        // POZIOM 5: DIABOLICAL / EXPERT (ZĹ‚oĹĽone Ryby, W-Wing, Coloring)
+        // GŁÓWNY, RYGORYSTYCZNY DISPATCH ORDER (Rozwiązuje Strategy Overshadowing)
+        // --------------------------------------------------------------------
+        // Klasyfikacja działa według reguły: Named -> Fish -> ALS -> Uniqueness -> Chains.
+        // Generyczne węzły (Chains) są oceniane ZAWSZE na samym końcu na danym poziomie, 
+        // jako absolutne narzędzie "ostateczne" (gdy strukturalne szablony zawodzą).
         // ====================================================================
-        if (!suppress_slot_in_required_corridor(SlotSwordfish)) ar = p4_hard::apply_swordfish(st, result.strategy_stats[SlotSwordfish], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSwordfish, ar); return ar; }
-        if (!suppress_slot_in_required_corridor(SlotFinnedXWingSashimi)) ar = p5_expert::apply_finned_x_wing_sashimi(st, result.strategy_stats[SlotFinnedXWingSashimi], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotFinnedXWingSashimi, ar); return ar; }
-        ar = p5_expert::apply_simple_coloring(st, result.strategy_stats[SlotSimpleColoring], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSimpleColoring, ar); return ar; }
-        ar = p5_expert::apply_bug_plus_one(st, result.strategy_stats[SlotBUGPlusOne], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBUGPlusOne, ar); return ar; }
-        ar = p5_expert::apply_unique_rectangle(st, result.strategy_stats[SlotUniqueRectangle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotUniqueRectangle, ar); return ar; }
-        ar = p5_expert::apply_xyz_wing(st, result.strategy_stats[SlotXYZWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXYZWing, ar); return ar; }
-        ar = p5_expert::apply_w_wing(st, result.strategy_stats[SlotWWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotWWing, ar); return ar; }
-        
-        if (max_level <= 5) return ApplyResult::NoProgress;
+        static constexpr std::array<size_t, kStrategySlotCount> kDispatchOrder = {{
+            // LEVEL 1
+            SlotNakedSingle,
+            SlotHiddenSingle,
 
-        // ====================================================================
-        // POZIOM 6: NIGHTMARE / DIABOLICAL (Specyficzne Ryby, ALS, Deadly Patterns, Łańcuchy)
-        // Reguła architektoniczna: Named structures przed generycznymi chainami.
-        // ====================================================================
-        if (!suppress_slot_in_required_corridor(SlotJellyfish)) ar = p6_diabolical::apply_jellyfish(st, result.strategy_stats[SlotJellyfish], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotJellyfish, ar); return ar; }
+            // LEVEL 2
+            SlotPointingPairs,
+            SlotBoxLineReduction,
+            SlotNakedPair,
+            SlotHiddenPair,
+            SlotNakedTriple,
+            SlotHiddenTriple,
 
-        ar = p6_diabolical::apply_finned_swordfish_jellyfish(st, result.strategy_stats[SlotFinnedSwordfishJellyfish], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotFinnedSwordfishJellyfish, ar); return ar; }
-        ar = p6_diabolical::apply_wxyz_wing(st, result.strategy_stats[SlotWXYZWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotWXYZWing, ar); return ar; }
-        ar = p6_diabolical::apply_als_xz(st, result.strategy_stats[SlotALSXZ], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotALSXZ, ar); return ar; }
+            // LEVEL 3
+            SlotNakedQuad,
+            SlotHiddenQuad,
+            // Named / Fish P3
+            SlotXWing,
+            SlotYWing,
+            SlotSkyscraper,
+            SlotTwoStringKite,
+            SlotEmptyRectangle,
+            // Generic P3
+            SlotRemotePairs,
 
-        ar = p6_diabolical::apply_unique_loop(st, result.strategy_stats[SlotUniqueLoop], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotUniqueLoop, ar); return ar; }
-        ar = p6_diabolical::apply_avoidable_rectangle(st, result.strategy_stats[SlotAvoidableRectangle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotAvoidableRectangle, ar); return ar; }
-        ar = p6_diabolical::apply_bivalue_oddagon(st, result.strategy_stats[SlotBivalueOddagon], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBivalueOddagon, ar); return ar; }
-        
-        ar = p6_diabolical::apply_ur_extended(st, result.strategy_stats[SlotURExtended], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotURExtended, ar); return ar; }
-        ar = p6_diabolical::apply_hidden_ur(st, result.strategy_stats[SlotHiddenUR], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotHiddenUR, ar); return ar; }
-        ar = p6_diabolical::apply_bug_type2(st, result.strategy_stats[SlotBUGType2], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBUGType2, ar); return ar; }
-        ar = p6_diabolical::apply_bug_type3(st, result.strategy_stats[SlotBUGType3], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBUGType3, ar); return ar; }
-        ar = p6_diabolical::apply_bug_type4(st, result.strategy_stats[SlotBUGType4], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBUGType4, ar); return ar; }
-        ar = p6_diabolical::apply_borescoper_qiu_deadly_pattern(st, result.strategy_stats[SlotBorescoperQiuDeadlyPattern], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBorescoperQiuDeadlyPattern, ar); return ar; }
+            // LEVEL 4
+            // Named / Fish / ALS P4
+            SlotSwordfish,
+            SlotFinnedXWingSashimi,
+            SlotXYZWing,
+            SlotWWing,
+            // Uniqueness P4
+            SlotUniqueRectangle,
+            SlotBUGPlusOne,
+            // Generic P4
+            SlotSimpleColoring,
 
-        if (!suppress_slot_in_required_corridor(SlotXYChain)) ar = p6_diabolical::apply_xy_chain(st, result.strategy_stats[SlotXYChain], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXYChain, ar); return ar; }
-        if (!suppress_slot_in_required_corridor(SlotXChain)) ar = p6_diabolical::apply_x_chain(st, result.strategy_stats[SlotXChain], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXChain, ar); return ar; }
-        
-        if (max_level <= 6) return ApplyResult::NoProgress;
+            // LEVEL 5
+            // Named / Fish / ALS P5
+            SlotJellyfish,
+            SlotFinnedSwordfishJellyfish,
+            SlotWXYZWing,
+            SlotALSXZ,
+            // Uniqueness P5
+            SlotBUGType2,
+            SlotBUGType3,
+            SlotBUGType4,
+            SlotUniqueLoop,
+            SlotAvoidableRectangle,
+            SlotBivalueOddagon,
+            // Generic P5
+            SlotXChain,
+            SlotXYChain,
 
-        // ====================================================================
-        // POZIOM 7: NIGHTMARE / THEORETICAL (Grupy ALS, Mutanty, APE)
-        // Reguła architektoniczna: named structures i ryby przed AIC / grouped AIC.
-        // ====================================================================
-        ar = p7_nightmare::apply_sue_de_coq(st, result.strategy_stats[SlotSueDeCoq], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSueDeCoq, ar); return ar; }
-        ar = p7_nightmare::apply_squirmbag(st, result.strategy_stats[SlotSquirmbag], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSquirmbag, ar); return ar; }
-        ar = p7_nightmare::apply_franken_fish(st, result.strategy_stats[SlotFrankenFish], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotFrankenFish, ar); return ar; }
-        ar = p7_nightmare::apply_mutant_fish(st, result.strategy_stats[SlotMutantFish], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotMutantFish, ar); return ar; }
-        ar = p7_nightmare::apply_kraken_fish(st, result.strategy_stats[SlotKrakenFish], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotKrakenFish, ar); return ar; }
-        ar = p7_nightmare::apply_als_xy_wing(st, result.strategy_stats[SlotALSXYWing], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotALSXYWing, ar); return ar; }
-        ar = p7_nightmare::apply_als_chain(st, result.strategy_stats[SlotALSChain], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotALSChain, ar); return ar; }
-        ar = p7_nightmare::apply_death_blossom(st, result.strategy_stats[SlotDeathBlossom], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotDeathBlossom, ar); return ar; }
-        ar = p7_nightmare::apply_aligned_pair_exclusion(st, result.strategy_stats[SlotAlignedPairExclusion], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotAlignedPairExclusion, ar); return ar; }
-        ar = p7_nightmare::apply_aligned_triple_exclusion(st, result.strategy_stats[SlotAlignedTripleExclusion], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotAlignedTripleExclusion, ar); return ar; }
+            // LEVEL 6
+            // Uniqueness P6
+            SlotURExtended,
+            SlotHiddenUR,
+            SlotBorescoperQiuDeadlyPattern,
+            // Named / ALS P6
+            SlotSueDeCoq,
+            SlotDeathBlossom,
+            SlotALSXYWing,
+            SlotALSChain,
+            SlotALSAIC,
+            // Generic P6
+            SlotMedusa3D,
+            SlotGroupedXCycle,
+            SlotContinuousNiceLoop,
+            SlotAIC,
+            SlotGroupedAIC,
 
-        ar = p7_nightmare::apply_medusa_3d(st, result.strategy_stats[SlotMedusa3D], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotMedusa3D, ar); return ar; }
-        ar = p7_nightmare::apply_continuous_nice_loop(st, result.strategy_stats[SlotContinuousNiceLoop], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotContinuousNiceLoop, ar); return ar; }
-        ar = p7_nightmare::apply_grouped_x_cycle(st, result.strategy_stats[SlotGroupedXCycle], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotGroupedXCycle, ar); return ar; }
+            // LEVEL 7
+            // Heavy Fish / Exclusions P7
+            SlotFrankenFish,
+            SlotMutantFish,
+            SlotKrakenFish,
+            SlotSquirmbag,
+            SlotAlignedPairExclusion,
+            SlotAlignedTripleExclusion,
+            // Generic P7
+            SlotForcingChains,
+            SlotDynamicForcingChains,
 
-        if (!suppress_slot_in_required_corridor(SlotAIC)) ar = p7_nightmare::apply_aic(st, result.strategy_stats[SlotAIC], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotAIC, ar); return ar; }
-        if (!suppress_slot_in_required_corridor(SlotGroupedAIC)) ar = p7_nightmare::apply_grouped_aic(st, result.strategy_stats[SlotGroupedAIC], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotGroupedAIC, ar); return ar; }
-        if (!suppress_slot_in_required_corridor(SlotALSAIC)) ar = p7_nightmare::apply_als_aic(st, result.strategy_stats[SlotALSAIC], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotALSAIC, ar); return ar; }
-        
-        if (max_level <= 7) return ApplyResult::NoProgress;
+            // LEVEL 8
+            // Theoretical / Heavy P8
+            SlotMSLS,
+            SlotExocet,
+            SlotSeniorExocet,
+            SlotSKLoop,
+            SlotPatternOverlayMethod
+        }};
 
-        // ====================================================================
-        // POZIOM 8: THEORETICAL / BRUTE FORCE (Wzorcowe Maski, MSLS)
-        // ====================================================================
-        
-        // PODPIÄCIA BRAKUJÄ„CYCH "SIEROT" P8
-        ar = p8_theoretical::apply_msls(st, result.strategy_stats[SlotMSLS], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotMSLS, ar); return ar; }
-        ar = p8_theoretical::apply_exocet(st, result.strategy_stats[SlotExocet], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotExocet, ar); return ar; }
-        ar = p8_theoretical::apply_senior_exocet(st, result.strategy_stats[SlotSeniorExocet], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSeniorExocet, ar); return ar; }
-        ar = p8_theoretical::apply_sk_loop(st, result.strategy_stats[SlotSKLoop], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSKLoop, ar); return ar; }
-        ar = p8_theoretical::apply_pattern_overlay_method(st, result.strategy_stats[SlotPatternOverlayMethod], result);
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotPatternOverlayMethod, ar); return ar; }
-        
-        if (!suppress_slot_in_required_corridor(SlotForcingChains)) ar = p8_theoretical::apply_forcing_chains(st, result.strategy_stats[SlotForcingChains], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotForcingChains, ar); return ar; }
-        if (!suppress_slot_in_required_corridor(SlotDynamicForcingChains)) ar = p8_theoretical::apply_dynamic_forcing_chains(st, result.strategy_stats[SlotDynamicForcingChains], result); else ar = ApplyResult::NoProgress;
-        if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotDynamicForcingChains, ar); return ar; }
+        for (const size_t slot : kDispatchOrder) {
+            const ApplyResult ar = try_slot(slot, true);
+            if (ar != ApplyResult::NoProgress) {
+                return ar;
+            }
+        }
 
         return ApplyResult::NoProgress;
     }
+
 
 public:
     GenericLogicCertifyResult certify(
@@ -957,20 +1042,20 @@ public:
         const bool has_budget = (budget != nullptr);
         const int level_limit = std::clamp(max_level, 1, 8);
 
-        // Bufor dla planszy (zero-alloc miÄ™dzy wykonaniami poszczegĂłlnych komĂłrek)
+        // Bufor dla planszy (zero-alloc między wykonaniami poszczególnych komórek)
         GenericBoard& board = generic_tls_board();
         board.topo = &topo;
         if (!board.init_from_puzzle(puzzle, false)) return result;
 
-        // PĹ‚aski bufor dla tablicy masek (zero-alloc), wprowadzany do CandidateState
-        // Zapas 4096 pozwala na bezproblemowÄ… operacjÄ™ na ekstremalnych siatkach (np. 64x64).
+        // Płaski bufor dla tablicy masek (zero-alloc), wprowadzany do CandidateState
+        // Zapas 4096 pozwala na bezproblemową operację na ekstremalnych siatkach (np. 64x64).
         static thread_local uint64_t tls_cands[4096];
         
         CandidateState st{};
         if (!st.init(board, topo, tls_cands)) return result;
 
-        // GĹ‚Ăłwna pÄ™tla dyspozytora. KaĹĽdy powrĂłt "Progress" sprawia, ĹĽe zaczynamy 
-        // przeczesywaÄ‡ strategie od najszybszych i najprostszych (P1).
+        // Główna pętla dyspozytora. Każdy powrót "Progress" sprawia, że zaczynamy 
+        // przeczesywać strategie od najszybszych i najprostszych (P1).
         while (board.empty_cells != 0) {
             if (has_budget && !budget->step()) {
                 result.timed_out = true;
@@ -982,7 +1067,7 @@ public:
             if (ar == ApplyResult::Contradiction) return result;
             if (ar == ApplyResult::Progress) continue;
             
-            // Ĺ»adna ze strategii na dozwolonym poziomie nie odnalazĹ‚a dedukcji (WÄ…skie gardĹ‚o nierozwiÄ…zane)
+            // Żadna ze strategii na dozwolonym poziomie nie odnalazła dedukcji (Wąskie gardło nierozwiązane)
             break;
         }
 
@@ -991,7 +1076,7 @@ public:
             result.solved_grid = board.values;
         }
         
-        // Zapis flag dla testĂłw mikro-profilujÄ…cych
+        // Zapis flag dla testów mikro-profilujących
         result.naked_single_scanned = result.strategy_stats[SlotNakedSingle].use_count > 0;
         result.hidden_single_scanned = result.strategy_stats[SlotHiddenSingle].use_count > 0;
         
@@ -1014,8 +1099,3 @@ public:
 };
 
 } // namespace sudoku_hpc::logic
-
-
-
-
-

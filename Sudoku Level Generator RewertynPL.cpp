@@ -193,6 +193,9 @@ inline void write_result_summary(std::ostream& out, const GenerateRunResult& res
     out << "Rejected: " << result.rejected << "\n";
     out << "Measurement profile: " << result.measurement_profile << "\n";
     out << "Effective clue range: " << result.effective_min_clues << "-" << result.effective_max_clues << "\n";
+    out << "Shared auto clue range: " << result.effective_shared_min_clues << "-" << result.effective_shared_max_clues << "\n";
+    out << "Generator auto clue range: " << result.effective_generator_min_clues << "-" << result.effective_generator_max_clues << "\n";
+    out << "Certifier auto clue range: " << result.effective_certifier_min_clues << "-" << result.effective_certifier_max_clues << "\n";
     out << "  - Prefilter: " << result.reject_prefilter << "\n";
     out << "  - Logic: " << result.reject_logic << "\n";
     out << "  - Uniqueness: " << result.reject_uniqueness << "\n";
@@ -320,6 +323,9 @@ inline void maybe_write_direct_cli_report(
     report << "Required strategy use (certifier): " << result.certifier_required_strategy_use << "\n";
     report << "Required strategy hit (certifier): " << result.certifier_required_strategy_hit << "\n";
     report << "Required strategy analyzed (certifier): " << result.certifier_required_strategy_analyzed << "\n";
+    report << "Shared auto clue range: " << result.effective_shared_min_clues << "-" << result.effective_shared_max_clues << "\n";
+    report << "Generator auto clue range: " << result.effective_generator_min_clues << "-" << result.effective_generator_max_clues << "\n";
+    report << "Certifier auto clue range: " << result.effective_certifier_min_clues << "-" << result.effective_certifier_max_clues << "\n";
     report << "Required strategy certified exact: " << result.required_strategy_certified_exact << "\n";
     report << "Required strategy use/hit (certifier): "
            << result.certifier_required_strategy_use << "/" << result.certifier_required_strategy_hit << "\n";

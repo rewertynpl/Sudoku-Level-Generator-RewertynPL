@@ -338,15 +338,15 @@ struct DifficultyUiEntry {
 
 inline const std::vector<DifficultyUiEntry>& difficulty_ui_catalog() {
     static const std::vector<DifficultyUiEntry> entries = {
-        {1, L"1 - Naked/Hidden Single"},
-        {2, L"2 - Pointing / Box-Line"},
-        {3, L"3 - Pairs/Triples"},
-        {4, L"4 - Wings/Fishes basic"},
-        {5, L"5 - Swordfish/FinnedXW/Coloring"},
-        {6, L"6 - Jellyfish/Chains/ALS"},
-        {7, L"7 - Medusa/AIC/Sue de Coq"},
-        {8, L"8 - MSLS/Exocet/Forcing Chains"},
-        {9, L"9 - Backtracking/Brutalny (max_clues=L1)"},
+        {1, L"P1 - Easy (Singles / Intersections)"},
+        {2, L"P2 - Medium (Pairs / Triples)"},
+        {3, L"P3 - Hard (Quads / X-Wing / Wings)"},
+        {4, L"P4 - Expert (Swordfish / UR / BUG+1 / Coloring)"},
+        {5, L"P5 - Diabolical (Jellyfish / Chains / ALS / UR ext.)"},
+        {6, L"P6 - Nightmare (Medusa / AIC / ALS-Chain / heavy patterns)"},
+        {7, L"P7 - Theoretical (MSLS / Exocet / SK Loop / POM / forcing)"},
+        {8, L"P8 - Brute Force (Backtracking)"},
+        {9, L"Legacy / Auto-compat profile"},
     };
     return entries;
 }
@@ -523,6 +523,86 @@ inline RequiredStrategy required_strategy_from_form(const GuiAppState* state) {
     return RequiredStrategy::None;
 }
 
+inline bool ui_required_strategy_relaxed_n12_exception(RequiredStrategy strategy) {
+    switch (strategy) {
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool ui_required_strategy_recommended_n12_only(RequiredStrategy strategy) {
+    switch (strategy) {
+        case RequiredStrategy::FrankenFish:
+        case RequiredStrategy::MutantFish:
+        case RequiredStrategy::KrakenFish:
+        case RequiredStrategy::Squirmbag:
+        case RequiredStrategy::MSLS:
+            return true;
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool ui_required_strategy_selectable_for_geometry(
+    RequiredStrategy strategy,
+    int box_rows,
+    int box_cols) {
+
+    if (strategy == RequiredStrategy::None) {
+        return true;
+    }
+
+    if (required_strategy_selectable_for_geometry(strategy, box_rows, box_cols)) {
+        return true;
+    }
+
+    const int n = std::max(1, box_rows * box_cols);
+    if (ui_required_strategy_relaxed_n12_exception(strategy) &&
+        strategy_requires_n_at_least_12(strategy) &&
+        n >= 9) {
+        return true;
+    }
+
+    return false;
+}
+
+inline std::wstring ui_required_strategy_geometry_suffix(
+    RequiredStrategy strategy,
+    int box_rows,
+    int box_cols,
+    bool selectable) {
+
+    const int n = std::max(1, box_rows * box_cols);
+    if (!selectable) {
+        if (strategy_requires_n_at_least_12(strategy) && n < 12) {
+            if (ui_required_strategy_relaxed_n12_exception(strategy)) {
+                return L"  [mozliwe od 3x3, ale bardzo kruche ponizej N=12]";
+            }
+            return L"  [zalecane N>=12]";
+        }
+        return L"  [niedostepne dla tej geometrii]";
+    }
+
+    if (ui_required_strategy_recommended_n12_only(strategy) && n < 12) {
+        if (ui_required_strategy_relaxed_n12_exception(strategy)) {
+            return L"  [uwaga: mozliwe na 3x3, ale rzadkie i kruche]";
+        }
+        return L"  [uwaga: praktycznie zalecane N>=12]";
+    }
+
+    return L"";
+}
+
 inline void refresh_required_strategy_options(GuiAppState* state, bool keep_selection = true) {
     if (state == nullptr) {
         return;
@@ -534,7 +614,6 @@ inline void refresh_required_strategy_options(GuiAppState* state, bool keep_sele
     const RequiredStrategy prev = keep_selection ? required_strategy_from_form(state) : RequiredStrategy::None;
     const int box_rows = std::max(1, form_field_int(state, F_BOX_ROWS, 3));
     const int box_cols = std::max(1, form_field_int(state, F_BOX_COLS, 3));
-    const int n = box_rows * box_cols;
 
     field->options.clear();
     field->option_payload.clear();
@@ -543,18 +622,12 @@ inline void refresh_required_strategy_options(GuiAppState* state, bool keep_sele
     for (const auto& entry : required_strategy_ui_catalog()) {
         const bool selectable =
             (entry.strategy == RequiredStrategy::None) ||
-            required_strategy_selectable_for_geometry(entry.strategy, box_rows, box_cols);
+            ui_required_strategy_selectable_for_geometry(entry.strategy, box_rows, box_cols);
         const bool requires_n12 =
             (entry.strategy != RequiredStrategy::None) && strategy_requires_n_at_least_12(entry.strategy);
 
         std::wstring label = entry.label;
-        if (!selectable) {
-            if (requires_n12 && n < 12) {
-                label += L"  [wymaga N>=12]";
-            } else {
-                label += L"  [niedostepne dla tej geometrii]";
-            }
-        }
+        label += ui_required_strategy_geometry_suffix(entry.strategy, box_rows, box_cols, selectable);
 
         field->options.push_back(std::move(label));
         field->option_payload.push_back(static_cast<int>(entry.strategy));
@@ -2636,3 +2709,6 @@ bool has_arg(int argc, char** argv, const char* key) {
 }
 
 } // namespace sudoku_hpc
+
+
+

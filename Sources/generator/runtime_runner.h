@@ -1,4 +1,4 @@
-﻿//Author copyright Marcin Matysek (Rewertyn)
+//Author copyright Marcin Matysek (Rewertyn)
 #pragma once
 
 #include <atomic>
@@ -162,40 +162,36 @@ inline GenerateRunResult run_generic_sudoku(
         (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues);
     const std::string measurement_profile = detect_measurement_profile(run_cfg);
 
-    ClueRange shared_auto_range =
-        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy);
-    ClueRange generator_auto_range = shared_auto_range;
-    ClueRange certifier_auto_range = shared_auto_range;
+    const AutoClueWindowPolicy effective_policy = run_cfg.split_auto_clue_policy
+        ? AutoClueWindowPolicy::Generator
+        : AutoClueWindowPolicy::Shared;
 
-#if defined(__cpp_decltype_auto) || 1
-    generator_auto_range =
-        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, AutoClueWindowPolicy::Generator);
-    certifier_auto_range =
-        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, AutoClueWindowPolicy::Certifier);
-#endif
+    ClueRange shared_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, AutoClueWindowPolicy::Shared);
+    ClueRange generator_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, effective_policy);
+    ClueRange certifier_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy,
+            run_cfg.split_auto_clue_policy ? AutoClueWindowPolicy::Certifier : AutoClueWindowPolicy::Shared);
 
     if (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues) {
         if (run_cfg.min_clues <= 0) run_cfg.min_clues = generator_auto_range.min_clues;
         if (run_cfg.max_clues <= 0) run_cfg.max_clues = generator_auto_range.max_clues;
         if (run_cfg.max_clues < run_cfg.min_clues) run_cfg.max_clues = run_cfg.min_clues;
     }
-
     if (auto_clue_range_requested && run_cfg.difficulty_level_required >= 9) {
         const int relaxed_min = std::max(run_cfg.min_clues, std::max(4, n));
         const int relaxed_max = std::max(relaxed_min, static_cast<int>(0.70 * static_cast<double>(nn)));
         run_cfg.min_clues = relaxed_min;
         run_cfg.max_clues = relaxed_max;
-
         generator_auto_range.min_clues = std::max(generator_auto_range.min_clues, relaxed_min);
         generator_auto_range.max_clues = std::max(generator_auto_range.max_clues, relaxed_max);
-        if (generator_auto_range.max_clues < generator_auto_range.min_clues) {
-            generator_auto_range.max_clues = generator_auto_range.min_clues;
-        }
+        if (generator_auto_range.max_clues < generator_auto_range.min_clues) generator_auto_range.max_clues = generator_auto_range.min_clues;
     }
-
     run_cfg.min_clues = std::clamp(run_cfg.min_clues, 0, nn);
     run_cfg.max_clues = std::clamp(run_cfg.max_clues, run_cfg.min_clues, nn);
-
+    shared_auto_range.min_clues = std::clamp(shared_auto_range.min_clues, 0, nn);
+    shared_auto_range.max_clues = std::clamp(shared_auto_range.max_clues, shared_auto_range.min_clues, nn);
     generator_auto_range.min_clues = std::clamp(generator_auto_range.min_clues, 0, nn);
     generator_auto_range.max_clues = std::clamp(generator_auto_range.max_clues, generator_auto_range.min_clues, nn);
     certifier_auto_range.min_clues = std::clamp(certifier_auto_range.min_clues, 0, nn);
@@ -203,6 +199,12 @@ inline GenerateRunResult run_generic_sudoku(
 
     result.effective_min_clues = run_cfg.min_clues;
     result.effective_max_clues = run_cfg.max_clues;
+    result.effective_shared_min_clues = shared_auto_range.min_clues;
+    result.effective_shared_max_clues = shared_auto_range.max_clues;
+    result.effective_generator_min_clues = generator_auto_range.min_clues;
+    result.effective_generator_max_clues = generator_auto_range.max_clues;
+    result.effective_certifier_min_clues = certifier_auto_range.min_clues;
+    result.effective_certifier_max_clues = certifier_auto_range.max_clues;
 
     const bool wants_p7_plus = run_cfg.difficulty_level_required >= 7;
     const bool wants_p8 = run_cfg.difficulty_level_required >= 8;

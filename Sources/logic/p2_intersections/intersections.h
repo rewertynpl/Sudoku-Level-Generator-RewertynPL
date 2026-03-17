@@ -17,24 +17,122 @@ namespace sudoku_hpc::logic::p2_intersections {
 
 namespace detail {
 
+inline bool row_has_digit_outside_box(
+    const CandidateState& st,
+    int row,
+    int box_index,
+    uint64_t bit) {
+
+    const int p0 = st.topo->house_offsets[row];
+    const int p1 = st.topo->house_offsets[row + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_box[idx] == box_index) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) != 0ULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool col_has_digit_outside_box(
+    const CandidateState& st,
+    int col,
+    int box_index,
+    uint64_t bit) {
+
+    const int n = st.topo->n;
+    const int house = n + col;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_box[idx] == box_index) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) != 0ULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool box_has_digit_outside_row(
+    const CandidateState& st,
+    int box_index,
+    int keep_row,
+    uint64_t bit) {
+
+    const int n = st.topo->n;
+    const int house = 2 * n + box_index;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_row[idx] == keep_row) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) != 0ULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool box_has_digit_outside_col(
+    const CandidateState& st,
+    int box_index,
+    int keep_col,
+    uint64_t bit) {
+
+    const int n = st.topo->n;
+    const int house = 2 * n + box_index;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_col[idx] == keep_col) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) != 0ULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline ApplyResult eliminate_from_row_outside_box(
     CandidateState& st,
     int row,
-    int box_col0,
-    int box_cols,
+    int box_index,
     uint64_t bit,
     bool& progress) {
 
-    const int n = st.topo->n;
-    for (int c = 0; c < n; ++c) {
-        if (c >= box_col0 && c < (box_col0 + box_cols)) {
+    const int p0 = st.topo->house_offsets[row];
+    const int p1 = st.topo->house_offsets[row + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_box[idx] == box_index) {
             continue;
         }
-        const int idx = row * n + c;
-        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+        if (st.board->values[idx] != 0) {
             continue;
         }
-        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+        if ((st.cands[idx] & bit) == 0ULL) {
             continue;
         }
         const ApplyResult er = st.eliminate(idx, bit);
@@ -49,21 +147,23 @@ inline ApplyResult eliminate_from_row_outside_box(
 inline ApplyResult eliminate_from_col_outside_box(
     CandidateState& st,
     int col,
-    int box_row0,
-    int box_rows,
+    int box_index,
     uint64_t bit,
     bool& progress) {
 
     const int n = st.topo->n;
-    for (int r = 0; r < n; ++r) {
-        if (r >= box_row0 && r < (box_row0 + box_rows)) {
+    const int house = n + col;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
+    for (int p = p0; p < p1; ++p) {
+        const int idx = st.topo->houses_flat[p];
+        if (st.topo->cell_box[idx] == box_index) {
             continue;
         }
-        const int idx = r * n + col;
-        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+        if (st.board->values[idx] != 0) {
             continue;
         }
-        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+        if ((st.cands[idx] & bit) == 0ULL) {
             continue;
         }
         const ApplyResult er = st.eliminate(idx, bit);
@@ -82,11 +182,19 @@ inline ApplyResult eliminate_from_box_outside_row(
     uint64_t bit,
     bool& progress) {
 
-    const int p0 = st.topo->house_offsets[2 * st.topo->n + box_index];
-    const int p1 = st.topo->house_offsets[2 * st.topo->n + box_index + 1];
+    const int n = st.topo->n;
+    const int house = 2 * n + box_index;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
     for (int p = p0; p < p1; ++p) {
         const int idx = st.topo->houses_flat[p];
         if (st.topo->cell_row[idx] == keep_row) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) == 0ULL) {
             continue;
         }
         const ApplyResult er = st.eliminate(idx, bit);
@@ -105,11 +213,19 @@ inline ApplyResult eliminate_from_box_outside_col(
     uint64_t bit,
     bool& progress) {
 
-    const int p0 = st.topo->house_offsets[2 * st.topo->n + box_index];
-    const int p1 = st.topo->house_offsets[2 * st.topo->n + box_index + 1];
+    const int n = st.topo->n;
+    const int house = 2 * n + box_index;
+    const int p0 = st.topo->house_offsets[house];
+    const int p1 = st.topo->house_offsets[house + 1];
     for (int p = p0; p < p1; ++p) {
         const int idx = st.topo->houses_flat[p];
         if (st.topo->cell_col[idx] == keep_col) {
+            continue;
+        }
+        if (st.board->values[idx] != 0) {
+            continue;
+        }
+        if ((st.cands[idx] & bit) == 0ULL) {
             continue;
         }
         const ApplyResult er = st.eliminate(idx, bit);
@@ -137,70 +253,62 @@ inline ApplyResult apply_pointing_pairs(
     ++s.use_count;
 
     const int n = st.topo->n;
-    const int box_rows = st.topo->box_rows;
-    const int box_cols = st.topo->box_cols;
-    const int box_rows_count = st.topo->box_rows_count;
-    const int box_cols_count = st.topo->box_cols_count;
-
     bool progress = false;
 
-    for (int brg = 0; brg < box_rows_count; ++brg) {
-        const int r0 = brg * box_rows;
-        for (int bcg = 0; bcg < box_cols_count; ++bcg) {
-            const int c0 = bcg * box_cols;
+    for (int box = 0; box < n; ++box) {
+        const int house = 2 * n + box;
+        const int p0 = st.topo->house_offsets[house];
+        const int p1 = st.topo->house_offsets[house + 1];
 
-            for (int d = 1; d <= n; ++d) {
-                const uint64_t bit = (1ULL << (d - 1));
+        for (int d = 1; d <= n; ++d) {
+            const uint64_t bit = (1ULL << (d - 1));
 
-                int first_row = -1;
-                int first_col = -1;
-                int count = 0;
-                bool same_row = true;
-                bool same_col = true;
+            int first_row = -1;
+            int first_col = -1;
+            int count = 0;
+            bool same_row = true;
+            bool same_col = true;
 
-                for (int dr = 0; dr < box_rows; ++dr) {
-                    const int rr = r0 + dr;
-                    for (int dc = 0; dc < box_cols; ++dc) {
-                        const int cc = c0 + dc;
-                        const int idx = rr * n + cc;
-
-                        if (st.board->values[idx] != 0) {
-                            continue;
-                        }
-                        if ((st.cands[idx] & bit) == 0ULL) {
-                            continue;
-                        }
-
-                        if (count == 0) {
-                            first_row = rr;
-                            first_col = cc;
-                        } else {
-                            same_row = same_row && (rr == first_row);
-                            same_col = same_col && (cc == first_col);
-                        }
-                        ++count;
-                    }
+            for (int p = p0; p < p1; ++p) {
+                const int idx = st.topo->houses_flat[p];
+                if (st.board->values[idx] != 0) {
+                    continue;
                 }
-
-                if (count < 2) {
+                if ((st.cands[idx] & bit) == 0ULL) {
                     continue;
                 }
 
-                if (same_row) {
-                    const ApplyResult er = detail::eliminate_from_row_outside_box(
-                        st, first_row, c0, box_cols, bit, progress);
-                    if (er == ApplyResult::Contradiction) {
-                        s.elapsed_ns += st.now_ns() - t0;
-                        return er;
-                    }
+                const int row = st.topo->cell_row[idx];
+                const int col = st.topo->cell_col[idx];
+                if (count == 0) {
+                    first_row = row;
+                    first_col = col;
+                } else {
+                    same_row = same_row && (row == first_row);
+                    same_col = same_col && (col == first_col);
                 }
-                if (same_col) {
-                    const ApplyResult er = detail::eliminate_from_col_outside_box(
-                        st, first_col, r0, box_rows, bit, progress);
-                    if (er == ApplyResult::Contradiction) {
-                        s.elapsed_ns += st.now_ns() - t0;
-                        return er;
-                    }
+                ++count;
+            }
+
+            if (count < 2) {
+                continue;
+            }
+
+            if (same_row && first_row >= 0 && detail::row_has_digit_outside_box(st, first_row, box, bit)) {
+                const ApplyResult er = detail::eliminate_from_row_outside_box(
+                    st, first_row, box, bit, progress);
+                if (er == ApplyResult::Contradiction) {
+                    s.elapsed_ns += st.now_ns() - t0;
+                    return er;
+                }
+            }
+
+            if (same_col && first_col >= 0 && detail::col_has_digit_outside_box(st, first_col, box, bit)) {
+                const ApplyResult er = detail::eliminate_from_col_outside_box(
+                    st, first_col, box, bit, progress);
+                if (er == ApplyResult::Contradiction) {
+                    s.elapsed_ns += st.now_ns() - t0;
+                    return er;
                 }
             }
         }
@@ -235,6 +343,9 @@ inline ApplyResult apply_box_line_reduction(
 
     // Rzędy -> box
     for (int row = 0; row < n; ++row) {
+        const int p0 = st.topo->house_offsets[row];
+        const int p1 = st.topo->house_offsets[row + 1];
+
         for (int d = 1; d <= n; ++d) {
             const uint64_t bit = (1ULL << (d - 1));
 
@@ -242,8 +353,6 @@ inline ApplyResult apply_box_line_reduction(
             int count = 0;
             bool same_box = true;
 
-            const int p0 = st.topo->house_offsets[row];
-            const int p1 = st.topo->house_offsets[row + 1];
             for (int p = p0; p < p1; ++p) {
                 const int idx = st.topo->houses_flat[p];
                 if (st.board->values[idx] != 0) {
@@ -265,6 +374,9 @@ inline ApplyResult apply_box_line_reduction(
             if (count < 2 || !same_box || target_box < 0) {
                 continue;
             }
+            if (!detail::box_has_digit_outside_row(st, target_box, row, bit)) {
+                continue;
+            }
 
             const ApplyResult er = detail::eliminate_from_box_outside_row(
                 st, target_box, row, bit, progress);
@@ -277,6 +389,10 @@ inline ApplyResult apply_box_line_reduction(
 
     // Kolumny -> box
     for (int col = 0; col < n; ++col) {
+        const int house = n + col;
+        const int p0 = st.topo->house_offsets[house];
+        const int p1 = st.topo->house_offsets[house + 1];
+
         for (int d = 1; d <= n; ++d) {
             const uint64_t bit = (1ULL << (d - 1));
 
@@ -284,8 +400,6 @@ inline ApplyResult apply_box_line_reduction(
             int count = 0;
             bool same_box = true;
 
-            const int p0 = st.topo->house_offsets[n + col];
-            const int p1 = st.topo->house_offsets[n + col + 1];
             for (int p = p0; p < p1; ++p) {
                 const int idx = st.topo->houses_flat[p];
                 if (st.board->values[idx] != 0) {
@@ -305,6 +419,9 @@ inline ApplyResult apply_box_line_reduction(
             }
 
             if (count < 2 || !same_box || target_box < 0) {
+                continue;
+            }
+            if (!detail::box_has_digit_outside_col(st, target_box, col, bit)) {
                 continue;
             }
 
