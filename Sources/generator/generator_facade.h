@@ -1,3 +1,4 @@
+
 // ============================================================================
 // SUDOKU HPC - GENERATOR PIPELINE
 // Moduł: generator_facade.h
@@ -134,31 +135,30 @@ struct AttemptPerfStats {
 
 // Pomocnicza metoda oceniająca, czy oczekiwany poziom został spełniony
 inline bool evaluate_difficulty_contract_generic(const logic::GenericLogicCertifyResult& logic_result, int difficulty_level_required) {
-    const int lvl = std::clamp(difficulty_level_required, 1, 9);
+    const int lvl = std::clamp(difficulty_level_required, 1, 8);
     
     if (lvl <= 1) {
-        return logic_result.solved && (logic_result.used_naked_single || logic_result.used_hidden_single);
+        return logic_result.solved &&
+               (logic_result.used_naked_single || logic_result.used_hidden_single ||
+                logic_result.used_pointing_pairs || logic_result.used_box_line);
     }
     if (lvl == 2) {
-        return logic_result.used_pointing_pairs || logic_result.used_box_line;
-    }
-    if (lvl == 3) {
         return logic_result.used_naked_pair || logic_result.used_hidden_pair ||
                logic_result.used_naked_triple || logic_result.used_hidden_triple;
     }
-    if (lvl == 4) {
+    if (lvl == 3) {
         return logic_result.used_naked_quad || logic_result.used_hidden_quad ||
                logic_result.used_x_wing || logic_result.used_y_wing ||
                logic_result.used_skyscraper || logic_result.used_two_string_kite ||
                logic_result.used_empty_rectangle || logic_result.used_remote_pairs;
     }
-    if (lvl == 5) {
+    if (lvl == 4) {
         return logic_result.used_swordfish || logic_result.used_bug_plus_one ||
                logic_result.used_finned_x_wing_sashimi || logic_result.used_simple_coloring ||
                logic_result.used_unique_rectangle || logic_result.used_xyz_wing ||
                logic_result.used_w_wing;
     }
-    if (lvl == 6) {
+    if (lvl == 5) {
         return logic_result.used_jellyfish || logic_result.used_x_chain ||
                logic_result.used_xy_chain || logic_result.used_wxyz_wing ||
                logic_result.used_finned_swordfish_jellyfish || logic_result.used_als_xz ||
@@ -166,11 +166,9 @@ inline bool evaluate_difficulty_contract_generic(const logic::GenericLogicCertif
                logic_result.used_bivalue_oddagon || logic_result.used_ur_extended ||
                logic_result.used_hidden_ur || logic_result.used_bug_type2 ||
                logic_result.used_bug_type3 || logic_result.used_bug_type4 ||
-               logic_result.used_borescoper_qiu_deadly_pattern ||
-               logic_result.used_unique_rectangle || logic_result.used_bug_plus_one ||
-               logic_result.used_w_wing;
+               logic_result.used_borescoper_qiu_deadly_pattern;
     }
-    if (lvl == 7) {
+    if (lvl == 6) {
         return logic_result.used_medusa_3d || logic_result.used_aic || logic_result.used_grouped_aic ||
                logic_result.used_grouped_x_cycle || logic_result.used_continuous_nice_loop ||
                logic_result.used_als_xy_wing || logic_result.used_als_chain ||
@@ -180,13 +178,13 @@ inline bool evaluate_difficulty_contract_generic(const logic::GenericLogicCertif
                logic_result.used_aligned_pair_exclusion || logic_result.used_aligned_triple_exclusion ||
                logic_result.used_als_aic;
     }
-    if (lvl == 8) {
+    if (lvl == 7) {
         return logic_result.used_msls || logic_result.used_exocet || logic_result.used_senior_exocet ||
                logic_result.used_sk_loop || logic_result.used_pattern_overlay_method ||
                logic_result.used_forcing_chains || logic_result.used_dynamic_forcing_chains;
     }
 
-    return true; // lvl 9 = Backtracking (brak specyficznych wymagań dla strategii)
+    return true; // lvl 8 = Backtracking (brak specyficznych wymagań dla kontraktu trudności)
 }
 
 // Sprawdzenie, czy Certyfikator użył żądanej strategii.
@@ -878,3 +876,5 @@ inline bool generate_one_generic(
 }
 
 } // namespace sudoku_hpc::generator
+
+

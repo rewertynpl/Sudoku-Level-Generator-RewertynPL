@@ -7,7 +7,6 @@
 // ============================================================================
 //Author copyright Marcin Matysek (Rewertyn)
 
-
 #pragma once
 
 #include <algorithm>
@@ -41,14 +40,14 @@ struct PomFrame {
 // ============================================================================
 struct alignas(64) ExactPatternScratchpad {
     static constexpr int MAX_N = 64;
-    static constexpr int MAX_NN = MAX_N * MAX_N;          // do 4096 dla 64x64
-    static constexpr int MAX_HOUSES = MAX_N * 3;          // 64 rzędy, 64 kolumny, 64 bloki
-    static constexpr int MAX_STRONG_LINKS_PER_DIGIT = MAX_HOUSES;
-    static constexpr int MAX_EDGES = MAX_HOUSES;
-    static constexpr int MAX_ADJ = MAX_NN * 128;
+    static constexpr int MAX_NN = MAX_N * MAX_N;                  // 4096
+    static constexpr int MAX_HOUSES = MAX_N * 3;                  // rows + cols + boxes
+    static constexpr int MAX_STRONG_LINKS_PER_DIGIT = MAX_HOUSES * 2;
+    static constexpr int MAX_EDGES = MAX_NN * 8;
+    static constexpr int MAX_ADJ = MAX_NN * 160;
     static constexpr int MAX_BFS = MAX_NN * 4;
     static constexpr int MAX_CHAIN = MAX_NN * 8;
-    static constexpr int MAX_LINK_EDGES = MAX_NN * 48;
+    static constexpr int MAX_LINK_EDGES = MAX_NN * 64;
     static constexpr int MAX_NESTING_LEVELS = 8;
 
     // ------------------------------------------------------------------------
@@ -86,8 +85,8 @@ struct alignas(64) ExactPatternScratchpad {
     // Bufory kandydatowo-krawędziowe dla 3D Medusa / coloring on bivalue graph
     // ------------------------------------------------------------------------
     static constexpr int MAX_MEDUSA_NODES = MAX_NN * 2;
-    static constexpr int MAX_MEDUSA_EDGES = MAX_NN * 6;
-    static constexpr int MAX_MEDUSA_ADJ = MAX_NN * 12;
+    static constexpr int MAX_MEDUSA_EDGES = MAX_NN * 8;
+    static constexpr int MAX_MEDUSA_ADJ = MAX_NN * 16;
     int medusa_node_cell[MAX_MEDUSA_NODES]{};
     uint64_t medusa_node_bit[MAX_MEDUSA_NODES]{};
     int medusa_color[MAX_MEDUSA_NODES]{};
@@ -117,7 +116,7 @@ struct alignas(64) ExactPatternScratchpad {
     int als_count = 0;
     int als_cells[MAX_NN]{};
     int als_cell_count = 0;
-    
+
     // Tablice powiązań silnych per-cyfra
     int strong_count[MAX_N + 1]{};
     int strong_a[MAX_N + 1][MAX_STRONG_LINKS_PER_DIGIT]{};
@@ -133,8 +132,8 @@ struct alignas(64) ExactPatternScratchpad {
     int dyn_digit_cells[MAX_NN]{};
     int dyn_digit_cell_count = 0;
 
-    int dyn_strong_edge_u[MAX_HOUSES * 2]{};
-    int dyn_strong_edge_v[MAX_HOUSES * 2]{};
+    int dyn_strong_edge_u[MAX_LINK_EDGES]{};
+    int dyn_strong_edge_v[MAX_LINK_EDGES]{};
     int dyn_strong_edge_count = 0;
     int dyn_weak_edge_u[MAX_LINK_EDGES]{};
     int dyn_weak_edge_v[MAX_LINK_EDGES]{};
@@ -156,8 +155,8 @@ struct alignas(64) ExactPatternScratchpad {
     int dyn_state_parent[MAX_NN * 2]{};
     int dyn_state_queue[MAX_NN * 2]{};
     int dyn_prop_queue[MAX_NN]{};
-    
-    // Odtwarzanie układu mask kandydatów po nieudanej/udanej propagacji 
+
+    // Odtwarzanie układu mask kandydatów po nieudanej/udanej propagacji
     // dla Forcing Chains. Gwarantuje stan czystości do 2-8 poziomów zagnieżdżenia.
     uint64_t dyn_cands_backup[MAX_NN]{};
     uint16_t dyn_values_backup[MAX_NN]{};
@@ -177,7 +176,7 @@ struct alignas(64) ExactPatternScratchpad {
     // Struktura zrzutu dla Pattern Overlay Method (DFS fallback P8)
     std::array<PomFrame, MAX_N> pom_stack{};
     int pom_depth = 0;
-    static constexpr int MAX_POM_UNDO = MAX_NN * 64;
+    static constexpr int MAX_POM_UNDO = MAX_NN * MAX_N;
     int pom_undo_idx[MAX_POM_UNDO]{};
     uint64_t pom_undo_old_mask[MAX_POM_UNDO]{};
     int pom_undo_count = 0;
@@ -188,8 +187,13 @@ struct alignas(64) ExactPatternScratchpad {
     // ========================================================================
     // Metody narzędziowe ułatwiające czyszczenie pamięci przed weryfikacją
     // ========================================================================
+    void reset_bfs(int nn) {
+        std::fill_n(visited, nn, 0);
+    }
+
     void reset_node_maps(int nn) {
         std::fill_n(cell_to_node, nn, -1);
+        std::fill_n(node_to_cell, nn, -1);
         node_count = 0;
         edge_count = 0;
     }
@@ -200,8 +204,35 @@ struct alignas(64) ExactPatternScratchpad {
         std::fill_n(adj_cursor, node_n, 0);
     }
 
+    void reset_chain_state() {
+        chain_count = 0;
+    }
+
+    void reset_medusa() {
+        medusa_node_count = 0;
+        medusa_edge_count = 0;
+    }
+
+    void reset_fish_wings(int n) {
+        std::fill_n(fish_row_masks, n, 0ULL);
+        std::fill_n(fish_col_masks, n, 0ULL);
+        std::fill_n(active_rows, n, 0);
+        std::fill_n(active_cols, n, 0);
+        wing_count = 0;
+    }
+
+    void reset_als() {
+        als_count = 0;
+        als_cell_count = 0;
+    }
+
+    void reset_strong_links(int n) {
+        std::fill_n(strong_count, n + 1, 0);
+    }
+
     void reset_dynamic_graph(int nn) {
         std::fill_n(dyn_cell_to_node, nn, -1);
+        std::fill_n(dyn_node_to_cell, nn, -1);
         dyn_node_count = 0;
         dyn_digit_cell_count = 0;
         dyn_strong_edge_count = 0;
@@ -216,7 +247,13 @@ struct alignas(64) ExactPatternScratchpad {
         std::fill_n(dyn_strong_cursor, node_n, 0);
         std::fill_n(dyn_weak_cursor, node_n, 0);
     }
-    
+
+    void reset_dynamic_runtime(int nn) {
+        std::fill_n(dyn_state_depth, nn * 2, -1);
+        std::fill_n(dyn_state_parent, nn * 2, -1);
+        dyn_empty_backup = 0;
+    }
+
     void reset_pom() {
         pom_depth = 0;
         pom_undo_count = 0;
@@ -227,9 +264,24 @@ struct alignas(64) ExactPatternScratchpad {
             f.tried_mask = 0ULL;
         }
     }
+
+    void reset_all_for_board(int n, int nn) {
+        reset_bfs(nn);
+        reset_node_maps(nn);
+        reset_graph(nn);
+        reset_chain_state();
+        reset_medusa();
+        reset_fish_wings(n);
+        reset_als();
+        reset_strong_links(n);
+        reset_dynamic_graph(nn);
+        reset_dynamic_adjacency(nn);
+        reset_dynamic_runtime(nn);
+        reset_pom();
+    }
 };
 
-// Szybki dostęp globalny dla wątku 
+// Szybki dostęp globalny dla wątku
 inline ExactPatternScratchpad& exact_pattern_scratchpad() {
     thread_local ExactPatternScratchpad scratch;
     return scratch;

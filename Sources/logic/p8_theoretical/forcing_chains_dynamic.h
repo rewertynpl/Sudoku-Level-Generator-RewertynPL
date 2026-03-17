@@ -1153,24 +1153,45 @@ inline ApplyResult apply_dynamic_forcing_assumption(CandidateState& st, bool& us
 // ============================================================================
 // GĹĂ“WNY INTERFEJS Forcing Chains
 // ============================================================================
+
+inline bool forcing_any_exact_required() {
+    return ::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::ForcingChains) ||
+           ::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::DynamicForcingChains);
+}
+
+inline bool forcing_is_asymmetric_geometry(const CandidateState& st) {
+    return st.topo->box_rows != st.topo->box_cols;
+}
+
 inline ApplyResult apply_forcing_chains(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = p7_nightmare::get_current_time_ns();
     ++s.use_count;
-    
-    // Heurystyka odcinajÄ…ca (Tylko w pĂłĹşnych fazach ma to sens)
+
     if (st.board->empty_cells > (st.topo->nn - st.topo->n)) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ApplyResult::NoProgress;
     }
 
+    const bool exact_required = ::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::ForcingChains);
+    const bool asym = forcing_is_asymmetric_geometry(st);
     bool used_dynamic = false;
     StrategyStats tmp{};
 
-    const int convergence_steps = std::clamp(6 + (st.topo->n / 3), 8, 16);
-    const int assertion_digit_cap = std::clamp(4 + (st.topo->n / 3), 6, 20);
-    const int assertion_link_cap = std::clamp(4 + (st.topo->n / 4), 6, 18);
-    const int house_cap = std::clamp(3 + (st.topo->n / 4), 4, 14);
-    const int house_places = std::clamp(2 + (st.topo->n / 16), 3, 4);
+    const int convergence_steps = std::clamp(7 + (st.topo->n / 3) + (asym ? 1 : 0), 8, exact_required ? 20 : 16);
+    const int assertion_digit_cap = std::clamp(5 + (st.topo->n / 3) + (asym ? 1 : 0), 6, exact_required ? 24 : 20);
+    const int assertion_link_cap = std::clamp(5 + (st.topo->n / 4) + (asym ? 1 : 0), 6, exact_required ? 22 : 18);
+    const int house_cap = std::clamp(4 + (st.topo->n / 4) + (asym ? 1 : 0), 4, exact_required ? 16 : 14);
+    const int house_places = std::clamp(2 + (st.topo->n / 16) + (asym ? 1 : 0), 3, 5);
+    const int pivot_budget = std::clamp(7 + (st.topo->n / 2) + (asym ? 1 : 0), 8, exact_required ? 28 : 24);
+
+    auto finish_progress = [&](bool mark_forcing, bool mark_dynamic) -> ApplyResult {
+        ++s.hit_count;
+        if (mark_forcing) r.used_forcing_chains = true;
+        if (mark_dynamic) r.used_dynamic_forcing_chains = true;
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::Progress;
+    };
+
     const ApplyResult ar_assert = forcing_assertion_graph_pass(
         st, assertion_digit_cap, assertion_link_cap, house_cap, house_places, convergence_steps, used_dynamic);
     if (ar_assert == ApplyResult::Contradiction) {
@@ -1178,76 +1199,86 @@ inline ApplyResult apply_forcing_chains(CandidateState& st, StrategyStats& s, Ge
         return ar_assert;
     }
     if (ar_assert == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_forcing_chains = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
+        return finish_progress(true, false);
     }
 
-    const int pivot_budget = std::clamp(6 + (st.topo->n / 2), 8, 24);
-    const ApplyResult ar_conv = forcing_convergence_pass(st, pivot_budget, convergence_steps, false, used_dynamic);
+    const ApplyResult ar_strong = forcing_strong_link_assertion_pass(
+        st, assertion_digit_cap, assertion_link_cap, convergence_steps, used_dynamic);
+    if (ar_strong == ApplyResult::Contradiction) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ar_strong;
+    }
+    if (ar_strong == ApplyResult::Progress) {
+        return finish_progress(true, false);
+    }
+
+    const ApplyResult ar_house = forcing_house_digit_assertion_pass(
+        st, house_cap, house_places, convergence_steps, used_dynamic);
+    if (ar_house == ApplyResult::Contradiction) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ar_house;
+    }
+    if (ar_house == ApplyResult::Progress) {
+        return finish_progress(true, false);
+    }
+
+    const ApplyResult ar_conv = forcing_convergence_pass(st, pivot_budget, convergence_steps, exact_required || asym, used_dynamic);
     if (ar_conv == ApplyResult::Contradiction) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
         return ar_conv;
     }
     if (ar_conv == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_forcing_chains = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
+        return finish_progress(true, false);
     }
 
-    // Faza 1: Ograniczone hipotezy wymuszeĹ„ (Nishio-style).
     const ApplyResult ar_assumption = apply_dynamic_forcing_assumption(st, used_dynamic);
-    
-    if (ar_assumption == ApplyResult::Contradiction) { 
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0; 
-        return ar_assumption; 
+    if (ar_assumption == ApplyResult::Contradiction) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ar_assumption;
     }
     if (ar_assumption == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_forcing_chains = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
-    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::ForcingChains)) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::NoProgress;
+        return finish_progress(true, false);
     }
 
-    // Faza 2: GĹ‚Ä™bokie zejĹ›cia AIC na grafie implikacji.
-    const int depth_cap = std::clamp(14 + (st.board->empty_cells / std::max(1, st.topo->n)), 16, 28);
-    
-    const ApplyResult dyn = p7_nightmare::bounded_implication_core(st, tmp, r, depth_cap, used_dynamic);
-    if (dyn == ApplyResult::Contradiction) { 
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0; 
-        return dyn; 
-    }
-    if (dyn == ApplyResult::Progress) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return dyn;
+    if (!exact_required) {
+        const int depth_cap = std::clamp(14 + (st.board->empty_cells / std::max(1, st.topo->n)) + (asym ? 1 : 0), 16, 28);
+        const ApplyResult dyn = p7_nightmare::bounded_implication_core(st, tmp, r, depth_cap, used_dynamic);
+        if (dyn == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return dyn;
+        }
+        if (dyn == ApplyResult::Progress) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return dyn;
+        }
     }
 
     s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
     return ApplyResult::NoProgress;
 }
 
-// ============================================================================
-// DYNAMIC FORCING CHAINS
-// Ewolucja zagnieĹĽdĹĽenia - wywoĹ‚anie jeszcze wiÄ™kszej iloĹ›ci wirtualnych BFS'Ăłw.
-// ============================================================================
 inline ApplyResult apply_dynamic_forcing_chains(CandidateState& st, StrategyStats& s, GenericLogicCertifyResult& r) {
     const uint64_t t0 = p7_nightmare::get_current_time_ns();
     ++s.use_count;
-    
+
+    const bool exact_required = ::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::DynamicForcingChains);
+    const bool asym = forcing_is_asymmetric_geometry(st);
     bool used_dynamic = false;
-    const int branch_steps = std::clamp(6 + (st.topo->n / 3), 8, 16);
-    const int dynamic_digit_cap = std::clamp(4 + (st.topo->n / 3), 6, 18);
-    const int outer_link_cap = std::clamp(4 + (st.topo->n / 4), 6, 16);
-    const int inner_link_cap = std::clamp(2 + (st.topo->n / 8), 3, 8);
-    const int house_cap = std::clamp(3 + (st.topo->n / 4), 4, 12);
-    const int outer_places = std::clamp(2 + (st.topo->n / 16), 3, 4);
-    const int inner_places = std::clamp(2 + (st.topo->n / 20), 3, 4);
+    const int branch_steps = std::clamp(7 + (st.topo->n / 3) + (asym ? 1 : 0), 8, exact_required ? 20 : 16);
+    const int dynamic_digit_cap = std::clamp(5 + (st.topo->n / 3) + (asym ? 1 : 0), 6, exact_required ? 22 : 18);
+    const int outer_link_cap = std::clamp(5 + (st.topo->n / 4) + (asym ? 1 : 0), 6, exact_required ? 20 : 16);
+    const int inner_link_cap = std::clamp(3 + (st.topo->n / 8) + (asym ? 1 : 0), 3, exact_required ? 10 : 8);
+    const int house_cap = std::clamp(4 + (st.topo->n / 4) + (asym ? 1 : 0), 4, exact_required ? 14 : 12);
+    const int outer_places = std::clamp(2 + (st.topo->n / 16) + (asym ? 1 : 0), 3, 5);
+    const int inner_places = std::clamp(2 + (st.topo->n / 20) + (asym ? 1 : 0), 3, 5);
+
+    auto finish_progress = [&]() -> ApplyResult {
+        ++s.hit_count;
+        r.used_dynamic_forcing_chains = true;
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return ApplyResult::Progress;
+    };
+
     const ApplyResult direct_assert = forcing_dynamic_assertion_graph_pass(
         st, dynamic_digit_cap, outer_link_cap, house_cap, outer_places, std::max(2, house_cap / 2), branch_steps, used_dynamic);
     if (direct_assert == ApplyResult::Contradiction) {
@@ -1255,10 +1286,27 @@ inline ApplyResult apply_dynamic_forcing_chains(CandidateState& st, StrategyStat
         return direct_assert;
     }
     if (direct_assert == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_dynamic_forcing_chains = true;
+        return finish_progress();
+    }
+
+    const ApplyResult direct_strong = forcing_dynamic_strong_link_pass(
+        st, dynamic_digit_cap, outer_link_cap, inner_link_cap, branch_steps, used_dynamic);
+    if (direct_strong == ApplyResult::Contradiction) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
+        return direct_strong;
+    }
+    if (direct_strong == ApplyResult::Progress) {
+        return finish_progress();
+    }
+
+    const ApplyResult direct_house = forcing_dynamic_house_digit_pass(
+        st, house_cap, outer_places, inner_places, branch_steps, used_dynamic);
+    if (direct_house == ApplyResult::Contradiction) {
+        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+        return direct_house;
+    }
+    if (direct_house == ApplyResult::Progress) {
+        return finish_progress();
     }
 
     const ApplyResult direct = apply_dynamic_forcing_convergence(st, used_dynamic);
@@ -1267,26 +1315,30 @@ inline ApplyResult apply_dynamic_forcing_chains(CandidateState& st, StrategyStat
         return direct;
     }
     if (direct == ApplyResult::Progress) {
-        ++s.hit_count;
-        r.used_dynamic_forcing_chains = true;
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::Progress;
-    }
-    if (::sudoku_hpc::logic::shared::required_exact_strategy_active(RequiredStrategy::DynamicForcingChains)) {
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return ApplyResult::NoProgress;
+        return finish_progress();
     }
 
     StrategyStats tmp{};
-    const ApplyResult dyn_exact = apply_forcing_chains(st, tmp, r);
-    
-    if (dyn_exact == ApplyResult::Contradiction) { 
-        s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0; 
-        return dyn_exact; 
-    }
-    if (dyn_exact == ApplyResult::Progress) {
+    const ApplyResult dyn_family = apply_forcing_chains(st, tmp, r);
+    if (dyn_family == ApplyResult::Contradiction) {
         s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
-        return dyn_exact;
+        return dyn_family;
+    }
+    if (dyn_family == ApplyResult::Progress) {
+        return finish_progress();
+    }
+
+    if (!exact_required) {
+        const int depth_cap = std::clamp(16 + (st.board->empty_cells / std::max(1, st.topo->n)) + (asym ? 1 : 0), 18, 30);
+        const ApplyResult dyn = p7_nightmare::bounded_implication_core(st, tmp, r, depth_cap, used_dynamic);
+        if (dyn == ApplyResult::Contradiction) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return dyn;
+        }
+        if (dyn == ApplyResult::Progress) {
+            s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;
+            return dyn;
+        }
     }
 
     s.elapsed_ns += p7_nightmare::get_current_time_ns() - t0;

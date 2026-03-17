@@ -1,304 +1,539 @@
 //Author copyright Marcin Matysek (Rewertyn)
-
-
 #pragma once
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstdint>
+#include <random>
 
 #include "pattern_planter_exact_templates.h"
 
 namespace sudoku_hpc::pattern_forcing {
 
-// --- Szablony luĹşne (fallback gdy brakuje Exact Template) ---
+namespace detail {
+
+inline bool pf_is_valid_idx(const GenericTopology& topo, int idx) {
+    return idx >= 0 && idx < topo.nn;
+}
+
+inline bool pf_cells_see_each_other(const GenericTopology& topo, int a, int b) {
+    if (!pf_is_valid_idx(topo, a) || !pf_is_valid_idx(topo, b) || a == b) {
+        return false;
+    }
+    return topo.cell_row[static_cast<size_t>(a)] == topo.cell_row[static_cast<size_t>(b)] ||
+           topo.cell_col[static_cast<size_t>(a)] == topo.cell_col[static_cast<size_t>(b)] ||
+           topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(b)];
+}
+
+inline bool pf_add_anchor_protected(PatternScratch& sc, int idx) {
+    if (!sc.add_anchor(idx)) {
+        return false;
+    }
+    if (idx >= 0 && idx < sc.prepared_nn) {
+        sc.protected_cells[static_cast<size_t>(idx)] = static_cast<uint8_t>(1);
+    }
+    return true;
+}
+
+inline int pf_rand_mod(std::mt19937_64& rng, int bound) {
+    if (bound <= 0) {
+        return 0;
+    }
+    return static_cast<int>(rng() % static_cast<uint64_t>(bound));
+}
+
+inline int pf_pick_distinct_index(std::mt19937_64& rng, int bound, int avoid) {
+    if (bound <= 1) {
+        return avoid;
+    }
+    int v = avoid;
+    for (int t = 0; t < 128 && v == avoid; ++t) {
+        v = pf_rand_mod(rng, bound);
+    }
+    return v;
+}
+
+inline int pf_pick_third_distinct_index(std::mt19937_64& rng, int bound, int a, int b) {
+    if (bound <= 2) {
+        return a;
+    }
+    int v = a;
+    for (int t = 0; t < 128 && (v == a || v == b); ++t) {
+        v = pf_rand_mod(rng, bound);
+    }
+    return v;
+}
+
+inline int pf_house_size(const GenericTopology& topo, int house) {
+    return topo.house_offsets[static_cast<size_t>(house + 1)] - topo.house_offsets[static_cast<size_t>(house)];
+}
+
+inline int pf_house_pick_member(const GenericTopology& topo, int house, std::mt19937_64& rng) {
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    if (end <= begin) {
+        return -1;
+    }
+    const int off = begin + pf_rand_mod(rng, end - begin);
+    return topo.houses_flat[static_cast<size_t>(off)];
+}
+
+inline int pf_box_house(const GenericTopology& topo, int box) {
+    return 2 * topo.n + box;
+}
+
+inline bool pf_add_house_members(PatternScratch& sc,
+                                 const GenericTopology& topo,
+                                 int house,
+                                 int limit,
+                                 int exclude_a = -1,
+                                 int exclude_b = -1,
+                                 int exclude_c = -1) {
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = begin; p < end && sc.anchor_count < limit; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (idx == exclude_a || idx == exclude_b || idx == exclude_c) {
+            continue;
+        }
+        pf_add_anchor_protected(sc, idx);
+    }
+    return sc.anchor_count > 0;
+}
+
+inline bool pf_find_peer_in_box(const GenericTopology& topo, int base, int box, int& out_idx) {
+    const int house = pf_box_house(topo, box);
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = begin; p < end; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (idx != base && pf_cells_see_each_other(topo, base, idx)) {
+            out_idx = idx;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool pf_find_row_cells_in_box(const GenericTopology& topo, int box, int row, int& out_a, int& out_b) {
+    out_a = -1;
+    out_b = -1;
+    const int house = pf_box_house(topo, box);
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = begin; p < end; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (topo.cell_row[static_cast<size_t>(idx)] != row) {
+            continue;
+        }
+        if (out_a < 0) {
+            out_a = idx;
+        } else if (idx != out_a) {
+            out_b = idx;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool pf_find_col_cells_in_box(const GenericTopology& topo, int box, int col, int& out_a, int& out_b) {
+    out_a = -1;
+    out_b = -1;
+    const int house = pf_box_house(topo, box);
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = begin; p < end; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (topo.cell_col[static_cast<size_t>(idx)] != col) {
+            continue;
+        }
+        if (out_a < 0) {
+            out_a = idx;
+        } else if (idx != out_a) {
+            out_b = idx;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline int pf_pick_box_with_min_house_intersection(const GenericTopology& topo,
+                                                   bool by_row,
+                                                   int min_count,
+                                                   std::mt19937_64& rng,
+                                                   int* out_house_index = nullptr) {
+    if (topo.box_rows <= 0 || topo.box_cols <= 0) {
+        return -1;
+    }
+    const int box_count = topo.box_rows_count * topo.box_cols_count;
+    const int start = pf_rand_mod(rng, std::max(1, box_count));
+    for (int probe = 0; probe < box_count; ++probe) {
+        const int box = (start + probe) % box_count;
+        const int br = box / topo.box_cols_count;
+        const int bc = box % topo.box_cols_count;
+        if (by_row) {
+            const int r0 = br * topo.box_rows;
+            for (int dr = 0; dr < topo.box_rows; ++dr) {
+                int a = -1, b = -1;
+                if (pf_find_row_cells_in_box(topo, box, r0 + dr, a, b)) {
+                    if (out_house_index) {
+                        *out_house_index = r0 + dr;
+                    }
+                    return box;
+                }
+            }
+        } else {
+            const int c0 = bc * topo.box_cols;
+            for (int dc = 0; dc < topo.box_cols; ++dc) {
+                int a = -1, b = -1;
+                if (pf_find_col_cells_in_box(topo, box, c0 + dc, a, b)) {
+                    if (out_house_index) {
+                        *out_house_index = c0 + dc;
+                    }
+                    return box;
+                }
+            }
+        }
+        (void)min_count;
+    }
+    return -1;
+}
+
+inline void pf_fill_anchor_masks(PatternScratch& sc, uint64_t mask) {
+    for (int i = 0; i < sc.anchor_count; ++i) {
+        sc.anchor_masks[static_cast<size_t>(i)] = mask;
+        sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = mask;
+    }
+}
+
+} // namespace detail
+
+// --- Szablony luźne / pół-kanoniczne (fallback gdy brakuje Exact Template) ---
+// Zmiany względem starej wersji:
+//  - mocniejsze geometrie dla intersection/fish/remote-pairs,
+//  - brak ukrytego założenia box_rows == box_cols,
+//  - anchor builders starają się budować kanoniczny szkielet wzorca,
+//  - anchors są od razu oznaczane jako protected, żeby digger nie zjadał rdzenia wzorca.
 
 inline bool build_chain_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.n < 2) return false;
+    if (topo.n < 2) {
+        return false;
+    }
     const int n = topo.n;
-    int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int r2 = r1;
-    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int c2 = c1;
-    for (int t = 0; t < 64 && r2 == r1; ++t) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int t = 0; t < 64 && c2 == c1; ++t) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    if (r1 == r2 || c1 == c2) return false;
-    sc.add_anchor(r1 * n + c1);
-    sc.add_anchor(r1 * n + c2);
-    sc.add_anchor(r2 * n + c2);
-    sc.add_anchor(r2 * n + c1);
+    const int r1 = detail::pf_rand_mod(rng, n);
+    const int r2 = detail::pf_pick_distinct_index(rng, n, r1);
+    const int c1 = detail::pf_rand_mod(rng, n);
+    const int c2 = detail::pf_pick_distinct_index(rng, n, c1);
+    if (r1 == r2 || c1 == c2) {
+        return false;
+    }
+    detail::pf_add_anchor_protected(sc, r1 * n + c1);
+    detail::pf_add_anchor_protected(sc, r1 * n + c2);
+    detail::pf_add_anchor_protected(sc, r2 * n + c2);
+    detail::pf_add_anchor_protected(sc, r2 * n + c1);
     return sc.anchor_count >= 4;
 }
 
 inline bool build_forcing_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.n < 4) return false;
+    if (!build_chain_anchors(topo, sc, rng) || sc.anchor_count < 4) {
+        return false;
+    }
     const int n = topo.n;
-    int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int r2 = r1;
-    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int c2 = c1;
-    for (int t = 0; t < 64 && r2 == r1; ++t) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int t = 0; t < 64 && c2 == c1; ++t) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    if (r1 == r2 || c1 == c2) return false;
-
-    const int p = r1 * n + c1;
-    const int a = r1 * n + c2;
-    const int b = r2 * n + c2;
-    const int t = r2 * n + c1;
-    sc.add_anchor(p);
-    sc.add_anchor(a);
-    sc.add_anchor(b);
-    sc.add_anchor(t);
+    const int p = sc.anchors[0];
+    const int a = sc.anchors[1];
+    const int b = sc.anchors[2];
 
     int row_support = -1;
-    for (int cc = 0; cc < n; ++cc) {
-        if (cc == c1 || cc == c2) continue;
-        row_support = r1 * n + cc;
-        break;
+    const int row_a = topo.cell_row[static_cast<size_t>(a)];
+    const int col_p = topo.cell_col[static_cast<size_t>(p)];
+    for (int cc = 0; cc < n && row_support < 0; ++cc) {
+        if (cc == topo.cell_col[static_cast<size_t>(p)] || cc == topo.cell_col[static_cast<size_t>(a)]) {
+            continue;
+        }
+        row_support = row_a * n + cc;
     }
+
     int col_support = -1;
-    for (int rr = 0; rr < n; ++rr) {
-        if (rr == r1 || rr == r2) continue;
-        col_support = rr * n + c2;
-        break;
+    const int col_b = topo.cell_col[static_cast<size_t>(b)];
+    for (int rr = 0; rr < n && col_support < 0; ++rr) {
+        if (rr == topo.cell_row[static_cast<size_t>(a)] || rr == topo.cell_row[static_cast<size_t>(b)]) {
+            continue;
+        }
+        col_support = rr * n + col_b;
     }
-    if (row_support >= 0) sc.add_anchor(row_support);
-    if (col_support >= 0) sc.add_anchor(col_support);
 
     int cross_support = -1;
     for (int rr = 0; rr < n && cross_support < 0; ++rr) {
-        if (rr == r1 || rr == r2) continue;
+        if (rr == topo.cell_row[static_cast<size_t>(p)] || rr == topo.cell_row[static_cast<size_t>(b)]) {
+            continue;
+        }
         for (int cc = 0; cc < n; ++cc) {
-            if (cc == c1 || cc == c2) continue;
+            if (cc == col_p || cc == col_b) {
+                continue;
+            }
             const int idx = rr * n + cc;
-            const bool sees_a =
-                topo.cell_row[static_cast<size_t>(idx)] == topo.cell_row[static_cast<size_t>(a)] ||
-                topo.cell_col[static_cast<size_t>(idx)] == topo.cell_col[static_cast<size_t>(a)] ||
-                topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(a)];
-            const bool sees_b =
-                topo.cell_row[static_cast<size_t>(idx)] == topo.cell_row[static_cast<size_t>(b)] ||
-                topo.cell_col[static_cast<size_t>(idx)] == topo.cell_col[static_cast<size_t>(b)] ||
-                topo.cell_box[static_cast<size_t>(idx)] == topo.cell_box[static_cast<size_t>(b)];
-            if (sees_a || sees_b) {
+            if (detail::pf_cells_see_each_other(topo, idx, a) || detail::pf_cells_see_each_other(topo, idx, b)) {
                 cross_support = idx;
                 break;
             }
         }
     }
-    if (cross_support >= 0) sc.add_anchor(cross_support);
 
+    if (row_support >= 0) detail::pf_add_anchor_protected(sc, row_support);
+    if (col_support >= 0) detail::pf_add_anchor_protected(sc, col_support);
+    if (cross_support >= 0) detail::pf_add_anchor_protected(sc, cross_support);
     return sc.anchor_count >= 6;
 }
 
 inline bool build_exocet_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.box_rows <= 1 || topo.box_cols <= 1) return false;
-    const int n = topo.n;
-    const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    const int house = 2 * n + box;
-    const int start = topo.house_offsets[static_cast<size_t>(house)];
-    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
-    if (end - start < 2) return false;
-
-    int b1 = topo.houses_flat[static_cast<size_t>(start + (rng() % static_cast<uint64_t>(end - start)))];
-    int b2 = b1;
-    for (int t = 0; t < 128; ++t) {
-        const int c = topo.houses_flat[static_cast<size_t>(start + (rng() % static_cast<uint64_t>(end - start)))];
-        if (c == b1) continue;
-        if (topo.cell_row[static_cast<size_t>(c)] == topo.cell_row[static_cast<size_t>(b1)]) continue;
-        if (topo.cell_col[static_cast<size_t>(c)] == topo.cell_col[static_cast<size_t>(b1)]) continue;
-        b2 = c;
-        break;
+    if (topo.box_rows <= 1 || topo.box_cols <= 1) {
+        return false;
     }
-    if (b1 == b2) return false;
-    sc.add_anchor(b1);
-    sc.add_anchor(b2);
-
-    const int r1 = topo.cell_row[static_cast<size_t>(b1)];
-    const int r2 = topo.cell_row[static_cast<size_t>(b2)];
-    const int base_box = topo.cell_box[static_cast<size_t>(b1)];
-    const int br = base_box / topo.box_cols_count;
-    const int base_bc = base_box % topo.box_cols_count;
-    int target_bc = base_bc;
-    for (int g = 0; g < 32; ++g) {
-        const int cand_bc = static_cast<int>(rng() % static_cast<uint64_t>(topo.box_cols_count));
-        if (cand_bc == base_bc) continue;
-        target_bc = cand_bc;
-        break;
-    }
-    if (target_bc == base_bc) return false;
-
-    const int c0_target = target_bc * topo.box_cols;
-    const int tc1 = c0_target;
-    const int tc2 = c0_target + 1;
-    if (tc2 >= n) return false;
-
-    const int target_box = br * topo.box_cols_count + target_bc;
-    const int t1 = r1 * n + tc1;
-    const int t2 = r2 * n + tc2;
-    if (t1 == t2) return false;
-    if (topo.cell_box[static_cast<size_t>(t1)] != target_box ||
-        topo.cell_box[static_cast<size_t>(t2)] != target_box) {
+    const int box_count = topo.box_rows_count * topo.box_cols_count;
+    const int box = detail::pf_rand_mod(rng, box_count);
+    const int house = detail::pf_box_house(topo, box);
+    if (detail::pf_house_size(topo, house) < 2) {
         return false;
     }
 
-    sc.add_anchor(t1);
-    sc.add_anchor(t2);
+    const int b1 = detail::pf_house_pick_member(topo, house, rng);
+    if (b1 < 0) {
+        return false;
+    }
+
+    int b2 = -1;
+    const int begin = topo.house_offsets[static_cast<size_t>(house)];
+    const int end = topo.house_offsets[static_cast<size_t>(house + 1)];
+    for (int p = begin; p < end; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (idx == b1) {
+            continue;
+        }
+        if (topo.cell_row[static_cast<size_t>(idx)] == topo.cell_row[static_cast<size_t>(b1)]) {
+            continue;
+        }
+        if (topo.cell_col[static_cast<size_t>(idx)] == topo.cell_col[static_cast<size_t>(b1)]) {
+            continue;
+        }
+        b2 = idx;
+        break;
+    }
+    if (b2 < 0) {
+        return false;
+    }
+
+    detail::pf_add_anchor_protected(sc, b1);
+    detail::pf_add_anchor_protected(sc, b2);
+
+    const int base_br = box / topo.box_cols_count;
+    const int base_bc = box % topo.box_cols_count;
+    const int target_bc = detail::pf_pick_distinct_index(rng, topo.box_cols_count, base_bc);
+    if (target_bc == base_bc) {
+        return false;
+    }
+
+    const int r1 = topo.cell_row[static_cast<size_t>(b1)];
+    const int r2 = topo.cell_row[static_cast<size_t>(b2)];
+    const int c0 = target_bc * topo.box_cols;
+    if (topo.box_cols < 2) {
+        return false;
+    }
+
+    const int t1 = r1 * topo.n + c0;
+    const int t2 = r2 * topo.n + std::min(c0 + 1, topo.n - 1);
+    const int target_box = base_br * topo.box_cols_count + target_bc;
+    if (topo.cell_box[static_cast<size_t>(t1)] != target_box ||
+        topo.cell_box[static_cast<size_t>(t2)] != target_box ||
+        t1 == t2) {
+        return false;
+    }
+
+    detail::pf_add_anchor_protected(sc, t1);
+    detail::pf_add_anchor_protected(sc, t2);
     return sc.anchor_count >= 4;
 }
 
 inline bool build_loop_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_chain_anchors(topo, sc, rng)) return false;
+    if (!build_chain_anchors(topo, sc, rng)) {
+        return false;
+    }
     const int n = topo.n;
-    int r3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    sc.add_anchor(r3 * n + c3);
-    r3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    sc.add_anchor(r3 * n + c3);
-    return sc.anchor_count >= 4;
+    const int r3 = detail::pf_rand_mod(rng, n);
+    const int c3 = detail::pf_rand_mod(rng, n);
+    const int r4 = detail::pf_pick_distinct_index(rng, n, r3);
+    const int c4 = detail::pf_pick_distinct_index(rng, n, c3);
+    detail::pf_add_anchor_protected(sc, r3 * n + c3);
+    detail::pf_add_anchor_protected(sc, r4 * n + c4);
+    return sc.anchor_count >= 6;
 }
 
 inline bool build_color_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_chain_anchors(topo, sc, rng)) return false;
-    const int n = topo.n;
-    const int r = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    const int c = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    sc.add_anchor(r * n + c);
-    sc.add_anchor(r * n + static_cast<int>(rng() % static_cast<uint64_t>(n)));
+    if (!build_chain_anchors(topo, sc, rng)) {
+        return false;
+    }
+    const int pivot = sc.anchors[0];
+    const int begin = topo.peer_offsets[static_cast<size_t>(pivot)];
+    const int end = topo.peer_offsets[static_cast<size_t>(pivot + 1)];
+    for (int p = begin; p < end && sc.anchor_count < 6; ++p) {
+        detail::pf_add_anchor_protected(sc, topo.peers_flat[static_cast<size_t>(p)]);
+    }
     return sc.anchor_count >= 5;
 }
 
 inline bool build_petal_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    const int pivot = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
-    sc.add_anchor(pivot);
-    const int start = topo.peer_offsets[static_cast<size_t>(pivot)];
+    const int pivot = detail::pf_rand_mod(rng, topo.nn);
+    detail::pf_add_anchor_protected(sc, pivot);
+    const int begin = topo.peer_offsets[static_cast<size_t>(pivot)];
     const int end = topo.peer_offsets[static_cast<size_t>(pivot + 1)];
-    for (int p = start; p < end && sc.anchor_count < 5; ++p) {
-        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    for (int p = begin; p < end && sc.anchor_count < 6; ++p) {
+        detail::pf_add_anchor_protected(sc, topo.peers_flat[static_cast<size_t>(p)]);
     }
     return sc.anchor_count >= 4;
 }
 
 inline bool build_intersection_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.box_rows <= 1 || topo.box_cols <= 1) return false;
-    const int n = topo.n;
-    const int box = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    const int br = box / topo.box_cols_count;
-    const int bc = box % topo.box_cols_count;
-    const int r0 = br * topo.box_rows;
-    const int c0 = bc * topo.box_cols;
-    const int row = r0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_rows));
-    const int col = c0 + static_cast<int>(rng() % static_cast<uint64_t>(topo.box_cols));
-    for (int dc = 0; dc < topo.box_cols; ++dc) sc.add_anchor(row * n + (c0 + dc));
-    for (int dr = 0; dr < topo.box_rows; ++dr) sc.add_anchor((r0 + dr) * n + col);
+    if (topo.box_rows <= 1 || topo.box_cols <= 1) {
+        return false;
+    }
+
+    int house_index = -1;
+    const bool by_row = ((rng() & 1ULL) == 0ULL);
+    const int box = detail::pf_pick_box_with_min_house_intersection(topo, by_row, 2, rng, &house_index);
+    if (box < 0 || house_index < 0) {
+        return false;
+    }
+
+    int a = -1;
+    int b = -1;
+    if (by_row) {
+        if (!detail::pf_find_row_cells_in_box(topo, box, house_index, a, b)) {
+            return false;
+        }
+    } else {
+        if (!detail::pf_find_col_cells_in_box(topo, box, house_index, a, b)) {
+            return false;
+        }
+    }
+
+    detail::pf_add_anchor_protected(sc, a);
+    detail::pf_add_anchor_protected(sc, b);
+
+    // Dodaj komórki wspierające w tej samej linii poza boksem.
+    const int line_house = by_row ? house_index : (topo.n + house_index);
+    const int begin = topo.house_offsets[static_cast<size_t>(line_house)];
+    const int end = topo.house_offsets[static_cast<size_t>(line_house + 1)];
+    for (int p = begin; p < end && sc.anchor_count < 5; ++p) {
+        const int idx = topo.houses_flat[static_cast<size_t>(p)];
+        if (topo.cell_box[static_cast<size_t>(idx)] == box) {
+            continue;
+        }
+        detail::pf_add_anchor_protected(sc, idx);
+    }
+
+    // I resztę boxa dla szkieletu Sue de Coq / intersection.
+    detail::pf_add_house_members(sc, topo, detail::pf_box_house(topo, box), 7, a, b);
     return sc.anchor_count >= 4;
 }
 
 inline bool build_fish_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.n < 4) return false;
+    if (topo.n < 4) {
+        return false;
+    }
     const int n = topo.n;
-    const int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int r2 = r1;
-    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int c2 = c1;
-    for (int g = 0; g < 64 && r2 == r1; ++g) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int g = 0; g < 64 && c2 == c1; ++g) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    if (r1 == r2 || c1 == c2) return false;
-    sc.add_anchor(r1 * n + c1);
-    sc.add_anchor(r1 * n + c2);
-    sc.add_anchor(r2 * n + c1);
-    sc.add_anchor(r2 * n + c2);
-    int c3 = c2;
-    for (int g = 0; g < 64 && (c3 == c1 || c3 == c2); ++g) c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
+    const int r1 = detail::pf_rand_mod(rng, n);
+    const int r2 = detail::pf_pick_distinct_index(rng, n, r1);
+    const int c1 = detail::pf_rand_mod(rng, n);
+    const int c2 = detail::pf_pick_distinct_index(rng, n, c1);
+    if (r1 == r2 || c1 == c2) {
+        return false;
+    }
+    detail::pf_add_anchor_protected(sc, r1 * n + c1);
+    detail::pf_add_anchor_protected(sc, r1 * n + c2);
+    detail::pf_add_anchor_protected(sc, r2 * n + c1);
+    detail::pf_add_anchor_protected(sc, r2 * n + c2);
+
+    // lekki fin / trzeci cover dla większej stabilności rodziny fish
+    const int c3 = detail::pf_pick_third_distinct_index(rng, n, c1, c2);
     if (c3 != c1 && c3 != c2) {
-        sc.add_anchor(r1 * n + c3);
-        sc.add_anchor(r2 * n + c3);
+        detail::pf_add_anchor_protected(sc, r1 * n + c3);
+        detail::pf_add_anchor_protected(sc, r2 * n + c3);
     }
     return sc.anchor_count >= 4;
 }
 
 inline bool build_franken_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_fish_like_anchors(topo, sc, rng) || topo.box_rows <= 1 || topo.box_cols <= 1) return false;
+    if (!build_fish_like_anchors(topo, sc, rng) || topo.box_rows <= 1 || topo.box_cols <= 1) {
+        return false;
+    }
     const int seed = sc.anchors[0];
     const int box = topo.cell_box[static_cast<size_t>(seed)];
-    const int house = 2 * topo.n + box;
-    const int p0 = topo.house_offsets[static_cast<size_t>(house)];
-    const int p1 = topo.house_offsets[static_cast<size_t>(house + 1)];
-    for (int p = p0; p < p1 && sc.anchor_count < 7; ++p) {
-        sc.add_anchor(topo.houses_flat[static_cast<size_t>(p)]);
-    }
+    detail::pf_add_house_members(sc, topo, detail::pf_box_house(topo, box), 8, seed);
     return sc.anchor_count >= 5;
 }
 
 inline bool build_mutant_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_franken_like_anchors(topo, sc, rng)) return false;
-    sc.add_anchor(static_cast<int>(rng() % static_cast<uint64_t>(topo.nn)));
-    sc.add_anchor(static_cast<int>(rng() % static_cast<uint64_t>(topo.nn)));
+    if (!build_franken_like_anchors(topo, sc, rng)) {
+        return false;
+    }
+    detail::pf_add_anchor_protected(sc, detail::pf_rand_mod(rng, topo.nn));
+    detail::pf_add_anchor_protected(sc, detail::pf_rand_mod(rng, topo.nn));
     return sc.anchor_count >= 6;
 }
 
 inline bool build_squirm_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (topo.n < 5) return false;
+    if (topo.n < 5) {
+        return false;
+    }
     const int n = topo.n;
-    int rows[5] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1, -1, -1 };
-    int cols[5] = { static_cast<int>(rng() % static_cast<uint64_t>(n)), -1, -1, -1, -1 };
+    int rows[5] = { detail::pf_rand_mod(rng, n), -1, -1, -1, -1 };
+    int cols[5] = { detail::pf_rand_mod(rng, n), -1, -1, -1, -1 };
 
     for (int i = 1; i < 5; ++i) {
-        rows[i] = rows[0];
-        for (int g = 0; g < 160 && rows[i] == rows[0]; ++g) {
-            const int cand = static_cast<int>(rng() % static_cast<uint64_t>(n));
-            bool unique = true;
-            for (int j = 0; j < i; ++j) {
-                if (rows[j] == cand) {
-                    unique = false;
-                    break;
-                }
+        rows[i] = detail::pf_pick_distinct_index(rng, n, rows[0]);
+        for (int j = 0; j < i; ++j) {
+            if (rows[i] == rows[j]) {
+                rows[i] = detail::pf_pick_distinct_index(rng, n, rows[j]);
             }
-            if (unique) rows[i] = cand;
         }
-        if (rows[i] == rows[0]) return false;
     }
-
     for (int i = 1; i < 5; ++i) {
-        cols[i] = cols[0];
-        for (int g = 0; g < 160 && cols[i] == cols[0]; ++g) {
-            const int cand = static_cast<int>(rng() % static_cast<uint64_t>(n));
-            bool unique = true;
-            for (int j = 0; j < i; ++j) {
-                if (cols[j] == cand) {
-                    unique = false;
-                    break;
-                }
+        cols[i] = detail::pf_pick_distinct_index(rng, n, cols[0]);
+        for (int j = 0; j < i; ++j) {
+            if (cols[i] == cols[j]) {
+                cols[i] = detail::pf_pick_distinct_index(rng, n, cols[j]);
             }
-            if (unique) cols[i] = cand;
         }
-        if (cols[i] == cols[0]) return false;
     }
-
     for (int ri = 0; ri < 5; ++ri) {
         for (int ci = 0; ci < 5; ++ci) {
-            sc.add_anchor(rows[ri] * n + cols[ci]);
+            detail::pf_add_anchor_protected(sc, rows[ri] * n + cols[ci]);
         }
     }
     return sc.anchor_count >= 25;
 }
 
 inline bool build_als_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    const int n = topo.n;
-    if (n < 4) return false;
-    const int pivot = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
-    sc.add_anchor(pivot);
-    const int start = topo.peer_offsets[static_cast<size_t>(pivot)];
+    if (topo.n < 4) {
+        return false;
+    }
+    const int pivot = detail::pf_rand_mod(rng, topo.nn);
+    detail::pf_add_anchor_protected(sc, pivot);
+    const int begin = topo.peer_offsets[static_cast<size_t>(pivot)];
     const int end = topo.peer_offsets[static_cast<size_t>(pivot + 1)];
-    for (int p = start; p < end && sc.anchor_count < 5; ++p) {
-        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    for (int p = begin; p < end && sc.anchor_count < 6; ++p) {
+        detail::pf_add_anchor_protected(sc, topo.peers_flat[static_cast<size_t>(p)]);
     }
     return sc.anchor_count >= 3;
 }
 
 inline bool build_exclusion_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    const int a = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
-    sc.add_anchor(a);
-    const int start = topo.peer_offsets[static_cast<size_t>(a)];
+    const int a = detail::pf_rand_mod(rng, topo.nn);
+    detail::pf_add_anchor_protected(sc, a);
+    const int begin = topo.peer_offsets[static_cast<size_t>(a)];
     const int end = topo.peer_offsets[static_cast<size_t>(a + 1)];
-    for (int p = start; p < end && sc.anchor_count < 4; ++p) {
-        sc.add_anchor(topo.peers_flat[static_cast<size_t>(p)]);
+    for (int p = begin; p < end && sc.anchor_count < 4; ++p) {
+        detail::pf_add_anchor_protected(sc, topo.peers_flat[static_cast<size_t>(p)]);
     }
     return sc.anchor_count >= 2;
 }
@@ -308,15 +543,12 @@ inline bool build_aic_like_anchors(const GenericTopology& topo, PatternScratch& 
 }
 
 inline bool build_grouped_aic_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_chain_anchors(topo, sc, rng)) return false;
+    if (!build_chain_anchors(topo, sc, rng)) {
+        return false;
+    }
     const int seed = sc.anchors[0];
     const int box = topo.cell_box[static_cast<size_t>(seed)];
-    const int house = 2 * topo.n + box;
-    const int p0 = topo.house_offsets[static_cast<size_t>(house)];
-    const int p1 = topo.house_offsets[static_cast<size_t>(house + 1)];
-    for (int p = p0; p < p1 && sc.anchor_count < 6; ++p) {
-        sc.add_anchor(topo.houses_flat[static_cast<size_t>(p)]);
-    }
+    detail::pf_add_house_members(sc, topo, detail::pf_box_house(topo, box), 7, seed);
     return sc.anchor_count >= 5;
 }
 
@@ -329,44 +561,45 @@ inline bool build_niceloop_like_anchors(const GenericTopology& topo, PatternScra
 }
 
 inline bool build_empty_rectangle_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
-    if (!build_intersection_like_anchors(topo, sc, rng)) return false;
-    if (sc.anchor_count <= 0) return false;
+    if (!build_intersection_like_anchors(topo, sc, rng) || sc.anchor_count <= 0) {
+        return false;
+    }
     const int pivot = sc.anchors[0];
     const int row = topo.cell_row[static_cast<size_t>(pivot)];
     const int col = topo.cell_col[static_cast<size_t>(pivot)];
     for (int p = topo.peer_offsets[static_cast<size_t>(pivot)];
-         p < topo.peer_offsets[static_cast<size_t>(pivot + 1)] && sc.anchor_count < 6; ++p) {
+         p < topo.peer_offsets[static_cast<size_t>(pivot + 1)] && sc.anchor_count < 7; ++p) {
         const int idx = topo.peers_flat[static_cast<size_t>(p)];
         if (topo.cell_row[static_cast<size_t>(idx)] == row || topo.cell_col[static_cast<size_t>(idx)] == col) {
-            sc.add_anchor(idx);
+            detail::pf_add_anchor_protected(sc, idx);
         }
     }
     return sc.anchor_count >= 4;
 }
 
 inline bool build_remote_pairs_like_anchors(const GenericTopology& topo, PatternScratch& sc, std::mt19937_64& rng) {
+    if (topo.n < 4) {
+        return false;
+    }
     const int n = topo.n;
-    if (n < 4) return false;
+    const int r1 = detail::pf_rand_mod(rng, n);
+    const int r2 = detail::pf_pick_distinct_index(rng, n, r1);
+    const int r3 = detail::pf_pick_third_distinct_index(rng, n, r1, r2);
+    const int c1 = detail::pf_rand_mod(rng, n);
+    const int c2 = detail::pf_pick_distinct_index(rng, n, c1);
+    const int c3 = detail::pf_pick_third_distinct_index(rng, n, c1, c2);
+    if (r1 == r2 || c1 == c2) {
+        return false;
+    }
 
-    int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int r2 = r1;
-    int r3 = r1;
-    int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    int c2 = c1;
-    int c3 = c1;
-    for (int t = 0; t < 64 && r2 == r1; ++t) r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int t = 0; t < 64 && r3 == r1; ++t) r3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int t = 0; t < 64 && c2 == c1; ++t) c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    for (int t = 0; t < 64 && (c3 == c1 || c3 == c2); ++t) c3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-    if (r1 == r2 || c1 == c2) return false;
-
-    sc.add_anchor(r1 * n + c1);
-    sc.add_anchor(r1 * n + c2);
-    sc.add_anchor(r2 * n + c2);
-    sc.add_anchor(r2 * n + c1);
-    if (c3 != c1 && c3 != c2) sc.add_anchor(r1 * n + c3);
-    if (r3 != r1 && r3 != r2) sc.add_anchor(r3 * n + c2);
-    return sc.anchor_count >= 5;
+    // Budujemy 6-komórkową ścieżkę o naprzemiennej widoczności, zamiast starego „prawie prostokąta”.
+    detail::pf_add_anchor_protected(sc, r1 * n + c1);
+    detail::pf_add_anchor_protected(sc, r1 * n + c2);
+    detail::pf_add_anchor_protected(sc, r2 * n + c2);
+    detail::pf_add_anchor_protected(sc, r2 * n + c3);
+    detail::pf_add_anchor_protected(sc, r3 * n + c3);
+    detail::pf_add_anchor_protected(sc, r3 * n + c1);
+    return sc.anchor_count >= 6;
 }
 
 inline int default_anchor_count(const GenericTopology& topo, PatternKind kind) {
@@ -458,7 +691,9 @@ inline int default_anchor_count(const GenericTopology& topo, PatternKind kind) {
 }
 
 inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, PatternKind kind, std::mt19937_64& rng) {
-    if (sc.anchor_count <= 0) return;
+    if (sc.anchor_count <= 0) {
+        return;
+    }
     const uint64_t full = pf_full_mask_for_n(topo.n);
     const bool large_geom = topo.n >= 25;
     const int want_a = large_geom ? 3 : 2;
@@ -467,24 +702,25 @@ inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, 
     uint64_t mask_a = random_digit_mask(topo.n, want_a, rng);
     uint64_t mask_b = random_digit_mask(topo.n, want_b, rng);
     uint64_t mask_c = random_digit_mask(topo.n, want_c, rng);
-    
+
     if (kind == PatternKind::ExocetLike) {
         const uint64_t shared = random_digit_mask(topo.n, large_geom ? 4 : 3, rng);
         if (sc.anchor_count >= 1) sc.allowed_masks[static_cast<size_t>(sc.anchors[0])] = shared;
         if (sc.anchor_count >= 2) sc.allowed_masks[static_cast<size_t>(sc.anchors[1])] = shared;
         for (int i = 2; i < sc.anchor_count; ++i) {
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] =
-                large_geom ? (mask_b | random_extra_digit(full, mask_b, rng)) & full : mask_c;
+            const int idx = sc.anchors[static_cast<size_t>(i)];
+            sc.allowed_masks[static_cast<size_t>(idx)] =
+                large_geom ? ((mask_b | random_extra_digit(full, mask_b, rng)) & full) : (mask_c & full);
         }
         return;
     }
+
     if (kind == PatternKind::ForcingLike) {
         const uint64_t d1 = random_digit_mask(topo.n, 1, rng);
         const uint64_t d2 = random_extra_digit(full, d1, rng);
         const uint64_t d3 = random_extra_digit(full, d1 | d2, rng);
         const uint64_t d4 = random_extra_digit(full, d1 | d2 | d3, rng);
         const uint64_t d5 = random_extra_digit(full, d1 | d2 | d3 | d4, rng);
-
         const uint64_t m12 = (d1 | d2) & full;
         const uint64_t m23 = (d2 | d3) & full;
         const uint64_t m13 = (d1 | d3) & full;
@@ -495,61 +731,75 @@ inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, 
         uint64_t row_support_mask = (m12 | d3 | d5) & full;
         uint64_t col_support_mask = (m23 | d1 | d5) & full;
         uint64_t cross_support_mask = (m13 | d2 | d4) & full;
-
         if (large_geom) {
             row_support_mask |= random_extra_digit(full, row_support_mask, rng);
             col_support_mask |= random_extra_digit(full, col_support_mask, rng);
             cross_support_mask |= random_extra_digit(full, cross_support_mask, rng);
         }
-
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = target_mask;
             switch (i) {
-            case 0: m = pivot_mask; break;       // p
-            case 1: m = branch_a_mask; break;    // a
-            case 2: m = branch_b_mask; break;    // b
-            case 3: m = target_mask; break;      // t
+            case 0: m = pivot_mask; break;
+            case 1: m = branch_a_mask; break;
+            case 2: m = branch_b_mask; break;
+            case 3: m = target_mask; break;
             case 4: m = row_support_mask; break;
             case 5: m = col_support_mask; break;
             default: m = cross_support_mask; break;
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            const int idx = sc.anchors[static_cast<size_t>(i)];
+            sc.allowed_masks[static_cast<size_t>(idx)] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::LoopLike) {
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = (i % 3 == 0) ? mask_c : ((i & 1) ? mask_a : mask_b);
             if (large_geom && (i % 4 == 0)) {
                 m |= random_extra_digit(full, m, rng);
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::ColorLike) {
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = ((i & 1) == 0) ? mask_a : (mask_a | random_extra_digit(full, mask_a, rng));
-            if (std::popcount(m) < 2) m |= random_extra_digit(full, m, rng);
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            if (std::popcount(m) < 2) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::PetalLike) {
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = (i == 0) ? (mask_a | mask_b) : ((i & 1) ? mask_a : mask_b);
-            if (i == 0 || (large_geom && (i % 3 == 0))) m |= random_extra_digit(full, m, rng);
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            if (i == 0 || (large_geom && (i % 3 == 0))) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::IntersectionLike) {
+        const uint64_t core = random_digit_mask(topo.n, 2, rng);
+        const uint64_t box_support = (core | random_extra_digit(full, core, rng)) & full;
+        const uint64_t line_support = (core | random_extra_digit(full, core, rng) | random_extra_digit(full, core, rng)) & full;
         for (int i = 0; i < sc.anchor_count; ++i) {
-            uint64_t m = (i % 3 == 0) ? (mask_a | mask_b) : ((i & 1) ? mask_b : mask_c);
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            uint64_t m = (i < 2) ? core : ((i < 5) ? line_support : box_support);
+            if (std::popcount(m) < 2) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::FishLike) {
         const uint64_t core = random_digit_mask(topo.n, 2, rng);
         for (int i = 0; i < sc.anchor_count; ++i) {
@@ -557,26 +807,30 @@ inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, 
             if (i >= 4 || (large_geom && (i % 3 == 0))) {
                 m |= random_extra_digit(full, m, rng);
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::FrankenLike || kind == PatternKind::MutantLike || kind == PatternKind::SquirmLike) {
         const uint64_t core = random_digit_mask(topo.n, 2, rng);
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = core;
             if (kind == PatternKind::SquirmLike) {
-                if (i >= 9 || (large_geom && (i % 4 == 0))) m |= random_extra_digit(full, m, rng);
+                if (i >= 9 || (large_geom && (i % 4 == 0))) {
+                    m |= random_extra_digit(full, m, rng);
+                }
             } else if (i >= 4 || (large_geom && (i % 3 == 0))) {
                 m |= random_extra_digit(full, m, rng);
             }
             if (kind == PatternKind::MutantLike && i >= 5) {
                 m |= random_extra_digit(full, m, rng);
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::SwordfishLike || kind == PatternKind::JellyfishLike || kind == PatternKind::FinnedFishLike) {
         const uint64_t core = random_digit_mask(topo.n, 2, rng);
         for (int i = 0; i < sc.anchor_count; ++i) {
@@ -587,25 +841,30 @@ inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, 
             if (kind == PatternKind::FinnedFishLike && (i >= 4 || (i % 3 == 0))) {
                 m |= random_extra_digit(full, m, rng);
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::AlsLike) {
         for (int i = 0; i < sc.anchor_count; ++i) {
             uint64_t m = (i % 3 == 0) ? (mask_a | mask_b) : (mask_b | mask_c);
-            if (std::popcount(m) < 3) m |= random_extra_digit(full, m, rng);
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            if (std::popcount(m) < 3) {
+                m |= random_extra_digit(full, m, rng);
+            }
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::ExclusionLike) {
         for (int i = 0; i < sc.anchor_count; ++i) {
-            uint64_t m = (i & 1) ? mask_a : mask_b;
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            const uint64_t m = (i & 1) ? mask_a : mask_b;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::AicLike || kind == PatternKind::GroupedAicLike ||
         kind == PatternKind::GroupedCycleLike || kind == PatternKind::NiceLoopLike ||
         kind == PatternKind::XChainLike || kind == PatternKind::XYChainLike) {
@@ -620,41 +879,41 @@ inline void apply_anchor_masks(const GenericTopology& topo, PatternScratch& sc, 
             if (kind == PatternKind::XYChainLike && (i % 2 == 1)) {
                 m |= random_extra_digit(full, m, rng);
             }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::EmptyRectangleLike) {
         const uint64_t core = random_digit_mask(topo.n, 2, rng);
         const uint64_t support = (core | random_extra_digit(full, core, rng)) & full;
         for (int i = 0; i < sc.anchor_count; ++i) {
-            uint64_t m = (i < 3) ? core : support;
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            const uint64_t m = (i < 3) ? core : support;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
+
     if (kind == PatternKind::RemotePairsLike) {
         const uint64_t pair = random_digit_mask(topo.n, 2, rng);
-        uint64_t row_victim = (pair | random_extra_digit(full, pair, rng)) & full;
-        if (std::popcount(row_victim) < 3) row_victim |= random_extra_digit(full, row_victim, rng);
-        uint64_t col_victim = (pair | random_extra_digit(full, pair, rng)) & full;
-        if (std::popcount(col_victim) < 3) col_victim |= random_extra_digit(full, col_victim, rng);
+        uint64_t victim = (pair | random_extra_digit(full, pair, rng)) & full;
+        if (std::popcount(victim) < 3) {
+            victim |= random_extra_digit(full, victim, rng);
+        }
         for (int i = 0; i < sc.anchor_count; ++i) {
-            uint64_t m = pair;
-            if (i >= 4) {
-                m = (i & 1) ? row_victim : col_victim;
-            }
-            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+            const uint64_t m = (i < 4) ? pair : victim;
+            sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
         }
         return;
     }
-    // DomyĹ›lnie Chain
+
+    // Domyślnie Chain.
     for (int i = 0; i < sc.anchor_count; ++i) {
         uint64_t m = (i & 1) ? mask_a : mask_b;
         if (large_geom && (i % 3 == 2)) {
             m |= random_extra_digit(full, m, rng);
         }
-        sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = (m & full);
+        sc.allowed_masks[static_cast<size_t>(sc.anchors[static_cast<size_t>(i)])] = m & full;
     }
 }
 
