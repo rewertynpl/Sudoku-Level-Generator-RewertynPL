@@ -1,6 +1,3 @@
-//Author copyright Marcin Matysek (Rewertyn)
-
-
 #pragma once
 
 #include <algorithm>
@@ -21,7 +18,6 @@
 
 namespace sudoku_hpc::pattern_forcing {
 
-// Typy wzorcĂłw (do losowych "luĹşnych" kotwic)
 enum class PatternKind : uint8_t {
     None = 0,
     Chain,
@@ -47,7 +43,9 @@ enum class PatternKind : uint8_t {
     RemotePairsLike,
     SwordfishLike,
     JellyfishLike,
-    FinnedFishLike
+    FinnedFishLike,
+    OverlayLike,
+    MedusaLike
 };
 
 enum class PatternMutationSource : uint8_t {
@@ -56,7 +54,6 @@ enum class PatternMutationSource : uint8_t {
     Best
 };
 
-// Mapowanie z flagi w main()
 enum class TargetPattern : uint8_t {
     None = 0,
     XChain,
@@ -65,7 +62,6 @@ enum class TargetPattern : uint8_t {
     MSLS
 };
 
-// Bezpieczny widok przekazywany na zewnÄ…trz bez kopiowania wektorĂłw
 struct PatternSeedView {
     PatternKind kind = PatternKind::None;
     PatternGeneratorPolicy generator_policy = PatternGeneratorPolicy::Unsupported;
@@ -78,6 +74,8 @@ struct PatternSeedView {
     bool exact_template = false;
     bool family_fallback_used = false;
     bool required_strategy_exact_contract_met = false;
+    bool corridor_protected = false;
+    bool anti_single_protected = false;
     int template_score = 0;
     int best_template_score = 0;
     int template_score_delta = 0;
@@ -85,11 +83,11 @@ struct PatternSeedView {
     int planner_zero_use_streak = 0;
     int planner_failure_streak = 0;
     int adaptive_target_strength = 0;
+    int survival_score = 0;
+    int protected_count = 0;
     PatternMutationSource mutation_source = PatternMutationSource::Random;
 };
 
-// Bufor wspĂłĹ‚dzielony dla kaĹĽdego wÄ…tku (Thread Local Storage)
-// Gwarantuje ZERO-ALLOC podczas wielokrotnego generowania masek.
 struct PatternScratch {
     int prepared_nn = 0;
     std::vector<uint16_t> seed_puzzle;
@@ -100,36 +98,42 @@ struct PatternScratch {
     int anchor_count = 0;
     bool exact_template = false;
     int template_score = 0;
+    int survival_score = 0;
+    bool corridor_protected = false;
+    bool anti_single_protected = false;
 
     void ensure(const GenericTopology& topo) {
-        if (prepared_nn != topo.nn) {
-            seed_puzzle.assign(static_cast<size_t>(topo.nn), 0);
-            allowed_masks.assign(static_cast<size_t>(topo.nn), 0ULL);
-            protected_cells.assign(static_cast<size_t>(topo.nn), 0);
-            prepared_nn = topo.nn;
-        }
+        if (prepared_nn == topo.nn) return;
+        seed_puzzle.assign(static_cast<size_t>(topo.nn), 0U);
+        allowed_masks.assign(static_cast<size_t>(topo.nn), 0ULL);
+        protected_cells.assign(static_cast<size_t>(topo.nn), 0U);
+        prepared_nn = topo.nn;
     }
 
     void reset(const GenericTopology& topo) {
         ensure(topo);
-        std::fill(seed_puzzle.begin(), seed_puzzle.end(), 0);
         const uint64_t full = pf_full_mask_for_n(topo.n);
+        std::fill(seed_puzzle.begin(), seed_puzzle.end(), 0U);
         std::fill(allowed_masks.begin(), allowed_masks.end(), full);
         std::fill(protected_cells.begin(), protected_cells.end(), static_cast<uint8_t>(0));
+        std::fill(anchors.begin(), anchors.end(), -1);
         std::fill(anchor_masks.begin(), anchor_masks.end(), 0ULL);
         anchor_count = 0;
         exact_template = false;
         template_score = 0;
+        survival_score = 0;
+        corridor_protected = false;
+        anti_single_protected = false;
     }
 
     bool add_anchor(int idx) {
         if (idx < 0 || idx >= prepared_nn) return false;
-        // Zabezpieczenie przed duplikatami
         for (int i = 0; i < anchor_count; ++i) {
             if (anchors[static_cast<size_t>(i)] == idx) return false;
         }
         if (anchor_count >= static_cast<int>(anchors.size())) return false;
-        anchors[static_cast<size_t>(anchor_count++)] = idx;
+        anchors[static_cast<size_t>(anchor_count)] = idx;
+        ++anchor_count;
         return true;
     }
 };
@@ -140,59 +144,20 @@ inline PatternScratch& tls_pattern_scratch() {
 }
 
 inline bool pattern_required_is_fragile_candidate_structure(RequiredStrategy required_strategy) {
-    switch (required_strategy) {
-    case RequiredStrategy::Jellyfish:
-    case RequiredStrategy::WXYZWing:
-    case RequiredStrategy::FinnedSwordfishJellyfish:
-    case RequiredStrategy::XChain:
-    case RequiredStrategy::XYChain:
-    case RequiredStrategy::ALSXZ:
-    case RequiredStrategy::UniqueLoop:
-    case RequiredStrategy::AvoidableRectangle:
-    case RequiredStrategy::BivalueOddagon:
-    case RequiredStrategy::UniqueRectangleExtended:
-    case RequiredStrategy::HiddenUniqueRectangle:
-    case RequiredStrategy::BUGType2:
-    case RequiredStrategy::BUGType3:
-    case RequiredStrategy::BUGType4:
-    case RequiredStrategy::BorescoperQiuDeadlyPattern:
-    case RequiredStrategy::Medusa3D:
-    case RequiredStrategy::AIC:
-    case RequiredStrategy::GroupedAIC:
-    case RequiredStrategy::GroupedXCycle:
-    case RequiredStrategy::ContinuousNiceLoop:
-    case RequiredStrategy::ALSXYWing:
-    case RequiredStrategy::ALSChain:
-    case RequiredStrategy::SueDeCoq:
-    case RequiredStrategy::DeathBlossom:
-    case RequiredStrategy::FrankenFish:
-    case RequiredStrategy::MutantFish:
-    case RequiredStrategy::KrakenFish:
-    case RequiredStrategy::Squirmbag:
-    case RequiredStrategy::AlignedPairExclusion:
-    case RequiredStrategy::AlignedTripleExclusion:
-    case RequiredStrategy::ALSAIC:
-    case RequiredStrategy::MSLS:
-    case RequiredStrategy::Exocet:
-    case RequiredStrategy::SeniorExocet:
-    case RequiredStrategy::SKLoop:
-    case RequiredStrategy::PatternOverlayMethod:
-    case RequiredStrategy::ForcingChains:
-    case RequiredStrategy::DynamicForcingChains:
-    case RequiredStrategy::RemotePairs:
-    case RequiredStrategy::SimpleColoring:
-        return true;
-    default:
-        return false;
-    }
+    return strategy_prefers_named_structures_before_generic(required_strategy) ||
+           strategy_requires_exact_only(required_strategy) ||
+           strategy_suppress_equivalent_generic_families(required_strategy) ||
+           strategy_prefers_generator_certifier_split(required_strategy);
 }
 
-inline void protect_pattern_cells_from_masks(
-    const GenericTopology& topo,
-    PatternScratch& sc) {
+inline void protect_pattern_cells_from_masks(const GenericTopology& topo, PatternScratch& sc) {
     for (int idx = 0; idx < topo.nn; ++idx) {
         if (sc.seed_puzzle[static_cast<size_t>(idx)] != 0U) {
-            sc.protected_cells[static_cast<size_t>(idx)] = 1;
+            sc.protected_cells[static_cast<size_t>(idx)] = 1U;
+        }
+        const uint64_t mask = sc.allowed_masks[static_cast<size_t>(idx)] & pf_full_mask_for_n(topo.n);
+        if (mask != 0ULL && std::popcount(mask) <= 2) {
+            sc.protected_cells[static_cast<size_t>(idx)] = 1U;
         }
     }
 }
@@ -209,10 +174,7 @@ inline uint64_t truncate_mask_bits(uint64_t mask, int keep_bits) {
     return out;
 }
 
-inline uint64_t exact_family_core_mask(
-    const ExactPatternTemplatePlan& plan,
-    int begin_idx,
-    int end_idx) {
+inline uint64_t exact_family_core_mask(const ExactPatternTemplatePlan& plan, int begin_idx, int end_idx) {
     uint64_t core = 0ULL;
     for (int i = begin_idx; i < end_idx; ++i) {
         const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)];
@@ -221,188 +183,66 @@ inline uint64_t exact_family_core_mask(
     return core;
 }
 
-inline void expand_exact_template_skeleton(
-    const GenericTopology& topo,
-    PatternKind kind,
-    ExactPatternTemplatePlan& plan) {
-    if (!plan.valid || plan.anchor_count <= 0) return;
-    if (plan.explicit_skeleton) return;
+inline void expand_exact_template_skeleton(const GenericTopology& topo, PatternKind kind, ExactPatternTemplatePlan& plan) {
+    if (!plan.valid || plan.anchor_count <= 0 || plan.explicit_skeleton) return;
+
+    int core_count = std::min(plan.anchor_count, 4);
+    int extra_cap = 10;
+    int keep_bits = 3;
+    switch (kind) {
+        case PatternKind::IntersectionLike: keep_bits = 4; extra_cap = 12; break;
+        case PatternKind::FishLike:
+        case PatternKind::FrankenLike:
+        case PatternKind::MutantLike:
+        case PatternKind::SquirmLike:
+        case PatternKind::SwordfishLike:
+        case PatternKind::JellyfishLike:
+        case PatternKind::FinnedFishLike: extra_cap = 12; break;
+        case PatternKind::AlsLike: keep_bits = 4; break;
+        case PatternKind::OverlayLike: extra_cap = 14; break;
+        default: break;
+    }
 
     const uint64_t full = pf_full_mask_for_n(topo.n);
-    const int n = topo.n;
-
-    int base_core = 0;
-    int core_count = 0;
-    int extra_cap = 8;
-    int keep_bits = 3;
-
-    switch (kind) {
-    case PatternKind::ExocetLike:
-        core_count = std::min(plan.anchor_count, 4);
-        extra_cap = 14;
-        keep_bits = 3;
-        break;
-    case PatternKind::LoopLike:
-        core_count = std::min(plan.anchor_count, 4);
-        extra_cap = 12;
-        keep_bits = 3;
-        break;
-    case PatternKind::ForcingLike:
-    case PatternKind::AicLike:
-    case PatternKind::GroupedAicLike:
-    case PatternKind::GroupedCycleLike:
-    case PatternKind::NiceLoopLike:
-    case PatternKind::XChainLike:
-    case PatternKind::XYChainLike:
-    case PatternKind::EmptyRectangleLike:
-    case PatternKind::RemotePairsLike:
-        core_count = std::min(plan.anchor_count, 4);
-        extra_cap = 10;
-        keep_bits = 3;
-        break;
-    case PatternKind::ColorLike:
-        core_count = std::min(plan.anchor_count, 6);
-        extra_cap = 10;
-        keep_bits = 3;
-        break;
-    case PatternKind::PetalLike:
-        core_count = std::min(plan.anchor_count, 4);
-        extra_cap = 10;
-        keep_bits = 3;
-        break;
-    case PatternKind::IntersectionLike:
-        core_count = std::min(plan.anchor_count, 6);
-        extra_cap = 12;
-        keep_bits = 4;
-        break;
-    case PatternKind::FishLike:
-    case PatternKind::FrankenLike:
-    case PatternKind::MutantLike:
-    case PatternKind::SquirmLike:
-    case PatternKind::SwordfishLike:
-    case PatternKind::JellyfishLike:
-    case PatternKind::FinnedFishLike:
-        core_count = std::min(plan.anchor_count, 6);
-        extra_cap = 12;
-        keep_bits = 3;
-        break;
-    case PatternKind::AlsLike:
-        core_count = std::min(plan.anchor_count, 4);
-        extra_cap = 10;
-        keep_bits = 4;
-        break;
-    case PatternKind::ExclusionLike:
-        core_count = std::min(plan.anchor_count, 3);
-        extra_cap = 8;
-        keep_bits = 3;
-        break;
-    default:
-        core_count = std::min(plan.anchor_count, 4);
-        break;
-    }
-
     for (int i = 0; i < core_count; ++i) {
-        plan.add_skeleton(
-            plan.anchor_idx[static_cast<size_t>(i)],
-            plan.anchor_masks[static_cast<size_t>(i)] & full);
+        plan.add_skeleton(plan.anchor_idx[static_cast<size_t>(i)], plan.anchor_masks[static_cast<size_t>(i)] & full);
     }
 
-    base_core = exact_family_core_mask(plan, 0, std::max(core_count, 1));
-    if (base_core == 0ULL) {
-        for (int i = 0; i < core_count; ++i) {
-            base_core |= truncate_mask_bits(plan.anchor_masks[static_cast<size_t>(i)], keep_bits);
-        }
-        base_core = truncate_mask_bits(base_core, keep_bits);
-    }
+    uint64_t base_core = exact_family_core_mask(plan, 0, std::max(core_count, 1));
     if (base_core == 0ULL) base_core = truncate_mask_bits(plan.anchor_masks[0], keep_bits);
 
-    int row_count[64]{};
-    int col_count[64]{};
-    int box_count[64]{};
-    uint64_t row_union[64]{};
-    uint64_t col_union[64]{};
-    uint64_t box_union[64]{};
-
-    for (int i = 0; i < core_count; ++i) {
-        const int idx = plan.anchor_idx[static_cast<size_t>(i)];
-        const uint64_t mask = plan.anchor_masks[static_cast<size_t>(i)] & full;
+    int added = 0;
+    for (int idx = 0; idx < topo.nn && added < extra_cap; ++idx) {
+        if (plan.find_anchor(idx) >= 0 || plan.find_skeleton(idx) >= 0) continue;
         const int row = topo.cell_row[static_cast<size_t>(idx)];
         const int col = topo.cell_col[static_cast<size_t>(idx)];
         const int box = topo.cell_box[static_cast<size_t>(idx)];
-        ++row_count[row];
-        ++col_count[col];
-        ++box_count[box];
-        row_union[row] |= mask;
-        col_union[col] |= mask;
-        box_union[box] |= mask;
-    }
-
-    int added_row[64]{};
-    int added_col[64]{};
-    int added_box[64]{};
-
-    int added = 0;
-    for (int pass = 0; pass < 2 && added < extra_cap; ++pass) {
-        const int need_houses = (pass == 0) ? 2 : 1;
-        for (int idx = 0; idx < topo.nn && added < extra_cap; ++idx) {
-            if (plan.find_anchor(idx) >= 0 || plan.find_skeleton(idx) >= 0) continue;
-
-            const int row = topo.cell_row[static_cast<size_t>(idx)];
-            const int col = topo.cell_col[static_cast<size_t>(idx)];
-            const int box = topo.cell_box[static_cast<size_t>(idx)];
-
-            int active_houses = 0;
-            uint64_t mask = 0ULL;
-
-            if (row_count[row] >= 2) {
-                ++active_houses;
-                mask |= truncate_mask_bits(row_union[row] | base_core, keep_bits);
+        int seen = 0;
+        uint64_t mask = base_core;
+        for (int i = 0; i < core_count; ++i) {
+            const int a = plan.anchor_idx[static_cast<size_t>(i)];
+            if (topo.cell_row[static_cast<size_t>(a)] == row ||
+                topo.cell_col[static_cast<size_t>(a)] == col ||
+                topo.cell_box[static_cast<size_t>(a)] == box) {
+                ++seen;
+                mask |= truncate_mask_bits(plan.anchor_masks[static_cast<size_t>(i)], keep_bits);
             }
-            if (col_count[col] >= 2) {
-                ++active_houses;
-                mask |= truncate_mask_bits(col_union[col] | base_core, keep_bits);
-            }
-            if (box_count[box] >= 2) {
-                ++active_houses;
-                mask |= truncate_mask_bits(box_union[box] | base_core, keep_bits);
-            }
-
-            if (active_houses < need_houses) continue;
-            mask &= full;
-            mask = truncate_mask_bits(mask, keep_bits);
-            if (mask == 0ULL || mask == full || std::popcount(mask) < 2) continue;
-
-            // ZABEZPIECZENIE przed Pigeonhole Principle: Jeśli dom jest w pełni wykorzystany, powstrzymaj układ przed zamkiem
-            const int bits = std::popcount(mask);
-            if (row_count[row] + added_row[row] >= bits) continue;
-            if (col_count[col] + added_col[col] >= bits) continue;
-            if (box_count[box] + added_box[box] >= bits) continue;
-
-            if (plan.add_skeleton(idx, mask)) {
-                ++added;
-                ++added_row[row];
-                ++added_col[col];
-                ++added_box[box];
-            }
+        }
+        mask = truncate_mask_bits(mask & full, keep_bits);
+        if (seen >= 2 && std::popcount(mask) >= 2 && mask != full) {
+            if (plan.add_skeleton(idx, mask)) ++added;
         }
     }
 }
 
-inline void protect_exact_template_skeleton(
-    PatternScratch& sc,
-    const ExactPatternTemplatePlan& plan,
-    RequiredStrategy required_strategy) {
-
-    // Poprawka: Chroń szkielet z otoczenia narzucający logikę na układy, ale NIE CHROŃ 
-    // głównych trzonów strategii (Anchorów). Ich zamaskowanie ukrywa cyfry przed detekcją na planszy.
+inline void protect_exact_template_skeleton(PatternScratch& sc, const ExactPatternTemplatePlan& plan, RequiredStrategy) {
     for (int i = 0; i < plan.skeleton_count; ++i) {
         const int idx = plan.skeleton_idx[static_cast<size_t>(i)];
         if (idx < 0 || idx >= sc.prepared_nn) continue;
-        if (plan.find_anchor(idx) >= 0) {
-            continue; 
-        }
-        sc.protected_cells[static_cast<size_t>(idx)] = 1;
+        if (plan.find_anchor(idx) >= 0) continue;
+        sc.protected_cells[static_cast<size_t>(idx)] = 1U;
     }
+    sc.corridor_protected = true;
 }
 
 struct PatternMutationState {
@@ -436,10 +276,9 @@ inline PatternMutationState& tls_pattern_mutation_state() {
     return s;
 }
 
-// Funkcja pomocnicza - zwraca maskÄ™ zĹ‚oĹĽonÄ… z `want` unikalnych losowych cyfr
 inline uint64_t random_digit_mask(int n, int want, std::mt19937_64& rng) {
     if (n <= 0) return 0ULL;
-    const int k = std::clamp(want, 1, n);
+    const int k = std::clamp(want, 1, std::min(n, 63));
     uint64_t m = 0ULL;
     int placed = 0;
     int guard = 0;
@@ -451,11 +290,11 @@ inline uint64_t random_digit_mask(int n, int want, std::mt19937_64& rng) {
         m |= bit;
         ++placed;
     }
-    if (m == 0ULL) {
-        const int d0 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        m = (1ULL << d0);
-    }
+    if (m == 0ULL) m = (1ULL << (rng() % static_cast<uint64_t>(n)));
     return m;
 }
 
 } // namespace sudoku_hpc::pattern_forcing
+
+
+

@@ -1,3 +1,5 @@
+// ==============================================================================
+
 //Author copyright Marcin Matysek (Rewertyn)
 
 #pragma once
@@ -86,6 +88,8 @@ struct FormField {
     std::wstring text;
     std::vector<std::wstring> options;
     std::vector<int> option_payload;
+    std::vector<uint8_t> option_enabled;
+    std::vector<uint8_t> option_requires_n12;
     int option_index = 0;
     bool checked = false;
     bool enabled = true;
@@ -359,6 +363,44 @@ inline int difficulty_level_from_form(const GuiAppState* state) {
     return std::clamp(sel + 1, 1, 9);
 }
 
+inline bool form_combo_option_enabled(const FormField* field, int index) {
+    if (field == nullptr || index < 0 || index >= static_cast<int>(field->options.size())) {
+        return false;
+    }
+    if (field->option_enabled.empty()) {
+        return true;
+    }
+    if (index >= static_cast<int>(field->option_enabled.size())) {
+        return true;
+    }
+    return field->option_enabled[static_cast<size_t>(index)] != 0;
+}
+
+inline bool form_combo_option_requires_n12(const FormField* field, int index) {
+    if (field == nullptr || index < 0 || index >= static_cast<int>(field->options.size())) {
+        return false;
+    }
+    if (field->option_requires_n12.empty()) {
+        return false;
+    }
+    if (index >= static_cast<int>(field->option_requires_n12.size())) {
+        return false;
+    }
+    return field->option_requires_n12[static_cast<size_t>(index)] != 0;
+}
+
+inline bool form_combo_has_disabled_options(const FormField* field) {
+    if (field == nullptr || field->option_enabled.empty()) {
+        return false;
+    }
+    for (uint8_t v : field->option_enabled) {
+        if (v == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline void refresh_difficulty_options(GuiAppState* state, bool keep_selection = true) {
     if (state == nullptr) {
         return;
@@ -373,16 +415,22 @@ inline void refresh_difficulty_options(GuiAppState* state, bool keep_selection =
 
     field->options.clear();
     field->option_payload.clear();
+    field->option_enabled.clear();
+    field->option_requires_n12.clear();
     for (const auto& entry : difficulty_ui_catalog()) {
         if (!difficulty_level_selectable_for_geometry(entry.level, box_rows, box_cols)) {
             continue;
         }
         field->options.push_back(entry.label);
         field->option_payload.push_back(entry.level);
+        field->option_enabled.push_back(1);
+        field->option_requires_n12.push_back(0);
     }
     if (field->options.empty()) {
         field->options.push_back(L"1 - Naked/Hidden Single");
         field->option_payload.push_back(1);
+        field->option_enabled.push_back(1);
+        field->option_requires_n12.push_back(0);
     }
     int next_index = 0;
     for (int i = 0; i < static_cast<int>(field->option_payload.size()); ++i) {
@@ -486,26 +534,54 @@ inline void refresh_required_strategy_options(GuiAppState* state, bool keep_sele
     const RequiredStrategy prev = keep_selection ? required_strategy_from_form(state) : RequiredStrategy::None;
     const int box_rows = std::max(1, form_field_int(state, F_BOX_ROWS, 3));
     const int box_cols = std::max(1, form_field_int(state, F_BOX_COLS, 3));
+    const int n = box_rows * box_cols;
 
     field->options.clear();
     field->option_payload.clear();
+    field->option_enabled.clear();
+    field->option_requires_n12.clear();
     for (const auto& entry : required_strategy_ui_catalog()) {
-        if (entry.strategy != RequiredStrategy::None &&
-            !required_strategy_selectable_for_geometry(entry.strategy, box_rows, box_cols)) {
-            continue;
+        const bool selectable =
+            (entry.strategy == RequiredStrategy::None) ||
+            required_strategy_selectable_for_geometry(entry.strategy, box_rows, box_cols);
+        const bool requires_n12 =
+            (entry.strategy != RequiredStrategy::None) && strategy_requires_n_at_least_12(entry.strategy);
+
+        std::wstring label = entry.label;
+        if (!selectable) {
+            if (requires_n12 && n < 12) {
+                label += L"  [wymaga N>=12]";
+            } else {
+                label += L"  [niedostepne dla tej geometrii]";
+            }
         }
-        field->options.push_back(entry.label);
+
+        field->options.push_back(std::move(label));
         field->option_payload.push_back(static_cast<int>(entry.strategy));
+        field->option_enabled.push_back(selectable ? 1 : 0);
+        field->option_requires_n12.push_back(requires_n12 ? 1 : 0);
     }
     if (field->options.empty()) {
         field->options.push_back(L"(brak)");
         field->option_payload.push_back(static_cast<int>(RequiredStrategy::None));
+        field->option_enabled.push_back(1);
+        field->option_requires_n12.push_back(0);
     }
 
     int next_index = 0;
     if (keep_selection) {
         for (int i = 0; i < static_cast<int>(field->option_payload.size()); ++i) {
-            if (field->option_payload[static_cast<size_t>(i)] == static_cast<int>(prev)) {
+            if (field->option_payload[static_cast<size_t>(i)] == static_cast<int>(prev) &&
+                form_combo_option_enabled(field, i)) {
+                next_index = i;
+                break;
+            }
+        }
+    }
+    if (!form_combo_option_enabled(field, next_index)) {
+        next_index = 0;
+        for (int i = 0; i < static_cast<int>(field->options.size()); ++i) {
+            if (form_combo_option_enabled(field, i)) {
                 next_index = i;
                 break;
             }
@@ -582,6 +658,8 @@ void init_form_model(GuiAppState* state) {
     strategy.label = L"required_strategy (opcjonalnie):";
     strategy.options.clear();
     strategy.option_payload.clear();
+    strategy.option_enabled.clear();
+    strategy.option_requires_n12.clear();
     strategy.option_index = 0;
     add_field(std::move(strategy));
 
@@ -725,7 +803,7 @@ void apply_clues_preset(GuiAppState* state) {
     const RequiredStrategy required = required_strategy_from_form(state);
     const int effective_budget_level = strategy_adjusted_level(lvl, required);
     const bool unlimited_by_default = (effective_budget_level >= 3);
-    const ClueRange range = resolve_auto_clue_range(box_rows, box_cols, lvl, required);
+    const ClueRange range = resolve_auto_clue_range(box_rows, box_cols, lvl, required, AutoClueWindowPolicy::Generator);
     const int min_clues = range.min_clues;
     const int max_clues = range.max_clues;
     const int suggested_reseed_s = suggest_reseed_interval_s(box_rows, box_cols, effective_budget_level);
@@ -783,7 +861,8 @@ bool read_config_from_form(GuiAppState* state, GenerateRunConfig& cfg, std::map<
         cfg.box_rows,
         cfg.box_cols,
         cfg.difficulty_level_required,
-        cfg.required_strategy);
+        cfg.required_strategy,
+        AutoClueWindowPolicy::Generator);
     cfg.min_clues = (min_clues_input > 0) ? min_clues_input : auto_clues.min_clues;
     cfg.max_clues = (max_clues_input > 0) ? max_clues_input : auto_clues.max_clues;
     cfg.threads = form_field_int(state, F_THREADS, 0);
@@ -889,13 +968,15 @@ void start_generation(GuiAppState* state) {
     
     // Show suggestions for profile and currently configured attempt budgets.
     const double suggested_time = suggest_time_budget_s(cfg.box_rows, cfg.box_cols, cfg.difficulty_level_required);
-    const ClueRange suggested_clues = resolve_auto_clue_range(cfg.box_rows, cfg.box_cols, cfg.difficulty_level_required, cfg.required_strategy);
+    const ClueRange suggested_clues = resolve_auto_clue_range(cfg.box_rows, cfg.box_cols, cfg.difficulty_level_required, cfg.required_strategy, AutoClueWindowPolicy::Generator);
+    const ClueRange certifier_clues = resolve_auto_clue_range(cfg.box_rows, cfg.box_cols, cfg.difficulty_level_required, cfg.required_strategy, AutoClueWindowPolicy::Certifier);
     
     std::wcout << L"\n[SUGESTIA] Dla rozmiaru " << (cfg.box_rows * cfg.box_cols) << L"x" << (cfg.box_rows * cfg.box_cols) << L":\n";
     std::wcout << L"  attempt_time_budget_s: sugerowane=" << static_cast<int>(std::ceil(suggested_time))
                << L"s, ustawione=" << static_cast<int>(cfg.attempt_time_budget_s) << L"s\n";
     std::wcout << L"  min_clues: sugerowane=" << suggested_clues.min_clues << L", ustawione=" << cfg.min_clues << L"\n";
-    std::wcout << L"  max_clues: sugerowane=" << suggested_clues.max_clues << L", ustawione=" << cfg.max_clues << L"\n\n";
+    std::wcout << L"  max_clues: sugerowane=" << suggested_clues.max_clues << L", ustawione=" << cfg.max_clues << L"\n";
+    std::wcout << L"  certifier_clues: sugerowane=" << certifier_clues.min_clues << L"-" << certifier_clues.max_clues << L"\n\n";
     
     append_log(state, L"Start generation...");
     log_info(
@@ -905,7 +986,8 @@ void start_generation(GuiAppState* state) {
             " required=" + to_string(cfg.required_strategy) +
             " threads=" + std::to_string(cfg.threads) +
             " suggested_time_budget=" + std::to_string(suggested_time) +
-            " suggested_clues=" + std::to_string(suggested_clues.min_clues) + "-" + std::to_string(suggested_clues.max_clues));
+            " suggested_clues=" + std::to_string(suggested_clues.min_clues) + "-" + std::to_string(suggested_clues.max_clues) +
+            " certifier_clues=" + std::to_string(certifier_clues.min_clues) + "-" + std::to_string(certifier_clues.max_clues));
     for (const auto& [k, v] : dict) {
         append_log(state, utf8_to_wide(k + "=" + v));
     }
@@ -1086,7 +1168,7 @@ void form_layout_fields(GuiAppState* state) {
                 current_section->section_rect.bottom =
                     std::max(current_section->section_rect.bottom, static_cast<LONG>(y + row_h + 12));
             }
-            y += row_h + row_gap;
+            y += row_h + row_gap + ((item.field_key == F_REQUIRED_STRATEGY) ? 16 : 0);
             continue;
         }
 
@@ -1127,7 +1209,7 @@ void form_destroy_inline_editor(GuiAppState* state, bool commit) {
     if (commit && field != nullptr) {
         if (state->inline_is_combo) {
             const int sel = static_cast<int>(SendMessageW(state->h_inline_editor, CB_GETCURSEL, 0, 0));
-            if (sel >= 0 && sel < static_cast<int>(field->options.size())) {
+            if (sel >= 0 && sel < static_cast<int>(field->options.size()) && form_combo_option_enabled(field, sel)) {
                 field->option_index = sel;
                 committed_field_key = field->key;
             }
@@ -1242,11 +1324,14 @@ void form_begin_inline_combo(GuiAppState* state, FormField* field) {
     form_destroy_inline_editor(state, true);
 
     RECT rc = form_view_rect(field->value_rect, state->form_scroll_y);
+    const DWORD combo_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+        ((field->key == F_REQUIRED_STRATEGY) ? (CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS)
+                                             : CBS_DROPDOWNLIST);
     state->h_inline_editor = CreateWindowExW(
         0,
         L"COMBOBOX",
         nullptr,
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+        combo_style,
         rc.left,
         rc.top,
         std::max(120, static_cast<int>(rc.right - rc.left)),
@@ -1259,8 +1344,12 @@ void form_begin_inline_combo(GuiAppState* state, FormField* field) {
         form_attach_inline_subclass(state);
         HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         SendMessageW(state->h_inline_editor, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        for (const auto& opt : field->options) {
-            SendMessageW(state->h_inline_editor, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(opt.c_str()));
+        for (int i = 0; i < static_cast<int>(field->options.size()); ++i) {
+            const auto& opt = field->options[static_cast<size_t>(i)];
+            const LRESULT idx = SendMessageW(state->h_inline_editor, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(opt.c_str()));
+            if (idx >= 0) {
+                SendMessageW(state->h_inline_editor, CB_SETITEMDATA, static_cast<WPARAM>(idx), static_cast<LPARAM>(i));
+            }
         }
         SendMessageW(state->h_inline_editor, CB_SETCURSEL, field->option_index, 0);
         SetFocus(state->h_inline_editor);
@@ -1478,7 +1567,7 @@ void update_suggestions_for_grid_size(GuiAppState* state) {
     const int box_cols = form_field_int(state, F_BOX_COLS, 3);
     const int difficulty = difficulty_level_from_form(state);
     const RequiredStrategy required = required_strategy_from_form(state);
-    const ClueRange suggested_clues = resolve_auto_clue_range(box_rows, box_cols, difficulty, required);
+    const ClueRange suggested_clues = resolve_auto_clue_range(box_rows, box_cols, difficulty, required, AutoClueWindowPolicy::Generator);
     
     // Update min/max clues fields (only if user hasn't modified them)
     const int current_min = form_field_int(state, F_MIN_CLUES, 0);
@@ -1505,8 +1594,13 @@ bool form_step_combo_value(GuiAppState* state, int field_key, int delta) {
     }
     const int count = static_cast<int>(field->options.size());
     int idx = field->option_index;
-    idx = (idx + delta + count) % count;
-    if (idx == field->option_index) {
+    for (int guard = 0; guard < count; ++guard) {
+        idx = (idx + delta + count) % count;
+        if (form_combo_option_enabled(field, idx)) {
+            break;
+        }
+    }
+    if (idx == field->option_index || !form_combo_option_enabled(field, idx)) {
         return false;
     }
     field->option_index = idx;
@@ -1776,7 +1870,11 @@ void form_paint(HWND hwnd, GuiAppState* state) {
             } else {
                 display = field->text;
             }
-            SetTextColor(mem, field->enabled ? RGB(22, 22, 22) : RGB(130, 130, 130));
+            COLORREF display_color = field->enabled ? RGB(22, 22, 22) : RGB(130, 130, 130);
+            if (field->key == F_REQUIRED_STRATEGY && form_combo_has_disabled_options(field)) {
+                display_color = RGB(22, 22, 22);
+            }
+            SetTextColor(mem, display_color);
             DrawTextW(mem, display.c_str(), -1, &txt, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
             if (field->type == FormFieldType::Combo) {
                 RECT arrow = frame;
@@ -1786,6 +1884,17 @@ void form_paint(HWND hwnd, GuiAppState* state) {
         }
         if (is_focus || is_hover) {
             form_draw_outline(mem, frame, is_focus ? RGB(52, 109, 194) : RGB(129, 165, 214));
+        }
+
+        if (field->key == F_REQUIRED_STRATEGY && form_combo_has_disabled_options(field)) {
+            RECT warn = value_rc;
+            warn.top = warn.bottom + 2;
+            warn.bottom = warn.top + 14;
+            warn.right += 220;
+            SetBkMode(mem, TRANSPARENT);
+            SetTextColor(mem, RGB(190, 32, 32));
+            DrawTextW(mem, L"Czerwone pozycje wymagaja N>=12 albo sa niedostepne dla tej geometrii.", -1, &warn,
+                      DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         }
 
         if (field->has_browse) {
@@ -1805,6 +1914,60 @@ void form_paint(HWND hwnd, GuiAppState* state) {
     DeleteObject(bmp);
     DeleteDC(mem);
     EndPaint(hwnd, &ps);
+}
+
+void form_measure_inline_combo_item(MEASUREITEMSTRUCT* mis) {
+    if (mis == nullptr) {
+        return;
+    }
+    mis->itemHeight = 18;
+}
+
+void form_draw_inline_combo_item(GuiAppState* state, const DRAWITEMSTRUCT* dis) {
+    if (state == nullptr || dis == nullptr || dis->CtlID != IDC_INLINE_EDIT || state->inline_field_key == 0) {
+        return;
+    }
+    FormField* field = find_form_field(state, state->inline_field_key);
+    if (field == nullptr || field->type != FormFieldType::Combo) {
+        return;
+    }
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+    if (dis->itemID == static_cast<UINT>(-1)) {
+        FillRect(hdc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        return;
+    }
+
+    const int idx = static_cast<int>(dis->itemID);
+    const bool enabled = form_combo_option_enabled(field, idx);
+    const bool requires_n12 = form_combo_option_requires_n12(field, idx);
+    const bool selected = (dis->itemState & ODS_SELECTED) != 0;
+    const bool focused = (dis->itemState & ODS_FOCUS) != 0;
+
+    COLORREF bg = selected ? GetSysColor(COLOR_HIGHLIGHT) : RGB(255, 255, 255);
+    if (!enabled && !selected) {
+        bg = RGB(255, 244, 244);
+    }
+    HBRUSH br = CreateSolidBrush(bg);
+    FillRect(hdc, &rc, br);
+    DeleteObject(br);
+
+    std::wstring text;
+    if (idx >= 0 && idx < static_cast<int>(field->options.size())) {
+        text = field->options[static_cast<size_t>(idx)];
+    }
+    RECT txt = rc;
+    txt.left += 6;
+    txt.right -= 6;
+    SetBkMode(hdc, TRANSPARENT);
+    COLORREF fg = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT)
+                           : (enabled ? RGB(24, 24, 24) : (requires_n12 ? RGB(190, 32, 32) : RGB(150, 70, 70)));
+    SetTextColor(hdc, fg);
+    DrawTextW(hdc, text.c_str(), -1, &txt, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+
+    if (focused) {
+        DrawFocusRect(hdc, &rc);
+    }
 }
 
 LRESULT CALLBACK form_panel_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1960,6 +2123,17 @@ LRESULT CALLBACK form_panel_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 return 0;
             }
             if (state->inline_is_combo) {
+                if (code == CBN_SELCHANGE) {
+                    FormField* field = find_form_field(state, state->inline_field_key);
+                    if (field != nullptr) {
+                        const int sel = static_cast<int>(SendMessageW(state->h_inline_editor, CB_GETCURSEL, 0, 0));
+                        if (sel >= 0 && !form_combo_option_enabled(field, sel)) {
+                            MessageBeep(MB_ICONWARNING);
+                            SendMessageW(state->h_inline_editor, CB_SETCURSEL, static_cast<WPARAM>(field->option_index), 0);
+                            return 0;
+                        }
+                    }
+                }
                 if (code == CBN_SELENDOK) {
                     form_request_inline_close(state, true);
                     return 0;
@@ -1977,6 +2151,15 @@ LRESULT CALLBACK form_panel_wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                     return 0;
                 }
             }
+        }
+        break;
+    case WM_MEASUREITEM:
+        form_measure_inline_combo_item(reinterpret_cast<MEASUREITEMSTRUCT*>(lParam));
+        return TRUE;
+    case WM_DRAWITEM:
+        if (state != nullptr) {
+            form_draw_inline_combo_item(state, reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
+            return TRUE;
         }
         break;
     case WM_PAINT:

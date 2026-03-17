@@ -1,3 +1,4 @@
+
 // ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // Module: finned_jelly_sword.h (Level 6 - Diabolical)
@@ -16,6 +17,7 @@
 #include "../../config/bit_utils.h"
 #include "../logic_result.h"
 #include "../shared/exact_pattern_scratchpad.h"
+#include "../shared/required_strategy_gate.h"
 
 #include "../p5_expert/finned_fish.h"
 #include "../p4_hard/fish_basic.h"
@@ -319,9 +321,11 @@ inline ApplyResult apply_finned_swordfish_jellyfish(CandidateState& st, Strategy
     bool progress = false;
     const int n = st.topo->n;
     const int nn = st.topo->nn;
+    const bool exact_corridor =
+        shared::required_exact_strategy_active(RequiredStrategy::FinnedSwordfishJellyfish);
 
     // Heavy direct finned-fish scan only in later board phase.
-    if (st.board->empty_cells <= (nn - 4 * n) || n >= 16) {
+    if (st.board->empty_cells <= (nn - 4 * n) || n >= 16 || exact_corridor) {
         ApplyResult ar = apply_finned_fish_direct(st, 3, true, progress, s, t0);
         if (ar == ApplyResult::Contradiction) return ar;
         ar = apply_finned_fish_direct(st, 3, false, progress, s, t0);
@@ -336,6 +340,12 @@ inline ApplyResult apply_finned_swordfish_jellyfish(CandidateState& st, Strategy
             s.elapsed_ns += st.now_ns() - t0;
             return ApplyResult::Progress;
         }
+    }
+
+    // When exact corridor is active, do not let family fallback steal the step.
+    if (exact_corridor) {
+        s.elapsed_ns += st.now_ns() - t0;
+        return ApplyResult::NoProgress;
     }
 
     ApplyResult ar = logic::p5_expert::apply_finned_x_wing_sashimi(st, tmp, r);
@@ -379,3 +389,5 @@ inline ApplyResult apply_finned_swordfish_jellyfish(CandidateState& st, Strategy
 }
 
 } // namespace sudoku_hpc::logic::p6_diabolical
+
+

@@ -1,4 +1,4 @@
-﻿//Author copyright Marcin Matysek (Rewertyn)
+//Author copyright Marcin Matysek (Rewertyn)
 
 #pragma once
 
@@ -40,6 +40,7 @@ struct ParseArgsResult {
 
     bool explain_profile = false;
     bool benchmark_mode = false;
+    bool print_clue_policy_debug = false;
 };
 
 inline bool parse_i64(const char* s, long long& out) {
@@ -155,7 +156,7 @@ inline ParseArgsResult parse_args(int argc, char** argv) {
         if (a == "--run-regression-tests") { r.run_regression_tests = true; continue; }
 
         if (a == "--run-geometry-gate") { r.run_geometry_gate = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.geometry_gate_report = argv[++i]; continue; }
-        if (a == "--run-quality-benchmark") { r.run_quality_benchmark = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.quality_benchmark_report = argv[++i]; continue; }
+        if (a == "--run-quality-benchmark" || a == "--quality-benchmark" || a == "--smoke-audit") { r.run_quality_benchmark = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.quality_benchmark_report = argv[++i]; continue; }
         if (a == "--quality-benchmark-max-cases" && next(v)) { parse_u64(v, r.quality_benchmark_max_cases); continue; }
         if (a == "--run-pre-difficulty-gate") { r.run_pre_difficulty_gate = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.pre_difficulty_gate_report = argv[++i]; continue; }
         if (a == "--run-asym-pair-benchmark") { r.run_asym_pair_benchmark = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.asym_pair_benchmark_report = argv[++i]; continue; }
@@ -163,11 +164,25 @@ inline ParseArgsResult parse_args(int argc, char** argv) {
         if (a == "--run-vip-gate") { r.run_vip_gate = true; if (i + 1 < argc && argv[i + 1][0] != '-') r.vip_gate_report = argv[++i]; continue; }
         if (a == "--explain-profile") { r.explain_profile = true; continue; }
 
-        if (a == "--benchmark-mode") { r.benchmark_mode = true; continue; }
+        if (a == "--benchmark-mode" || a == "--smoke-mode") { r.benchmark_mode = true; continue; }
         if (a == "--benchmark-output-file" && next(v)) { r.cfg.benchmark_output_file = v; continue; }
         if (a == "--fast-test") { r.cfg.fast_test_mode = true; continue; }
         if (a == "--no-fast-test") { r.cfg.fast_test_mode = false; continue; }
 
+        if (a == "--auto-clue-policy" && next(v)) {
+            const std::string_view sv(v);
+            if (sv == "split" || sv == "generator-certifier" || sv == "goldilocks-split") {
+                r.cfg.split_auto_clue_policy = true;
+            } else if (sv == "shared") {
+                r.cfg.split_auto_clue_policy = false;
+            }
+            continue;
+        }
+        if (a == "--goldilocks-bias-generator" && next(v)) { parse_f64(v, r.cfg.goldilocks_generator_bias); continue; }
+        if (a == "--goldilocks-bias-certifier" && next(v)) { parse_f64(v, r.cfg.goldilocks_certifier_bias); continue; }
+        if (a == "--goldilocks-family-overrides") { r.cfg.auto_clue_family_overrides = true; continue; }
+        if (a == "--no-goldilocks-family-overrides") { r.cfg.auto_clue_family_overrides = false; continue; }
+        if (a == "--print-clue-policy-debug") { r.cfg.print_clue_policy_debug = true; r.print_clue_policy_debug = true; continue; }
         if (a == "--stage-start") { r.cfg.stage_start = true; continue; }
         if (a == "--stage-end") { r.cfg.stage_end = true; continue; }
         if (a == "--perf-ab-suite") { r.cfg.perf_ab_suite = true; continue; }
@@ -186,3 +201,5 @@ inline ParseArgsResult parse_args(int argc, char** argv) {
 }
 
 } // namespace sudoku_hpc
+
+

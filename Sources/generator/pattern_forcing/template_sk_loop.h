@@ -1,124 +1,59 @@
-// ============================================================================
-// SUDOKU HPC - EXACT PATTERN FORCING
-// Moduł: template_sk_loop.h
-// Opis: Generuje rygorystyczny matematyczny szablon dla strategii SK-Loop.
-//       Wymusza powstanie łańcucha cyklicznego w DLX. Zero-allocation.
-// ============================================================================
-//Author copyright Marcin Matysek (Rewertyn)
-
-
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <random>
 
-// Zależności do topologii i struktury planu
 #include "../../core/board.h"
-#include "template_exocet.h" // Używamy wspóldzielonego ExactPatternTemplatePlan i pf_full_mask_for_n
+#include "template_exocet.h"
 
 namespace sudoku_hpc::pattern_forcing {
 
 class TemplateSKLoop {
 public:
-    // Wstrzykuje układ wierzchołków dla SK-Loop (cykliczny prostokąt).
-    // Dwie komórki stają się twardymi bivalue, a dwie dostają cyfry "wyjściowe" (exit digits).
     static bool build(const GenericTopology& topo, std::mt19937_64& rng, ExactPatternTemplatePlan& plan, bool dense_mode = false) {
-        plan = {}; // Reset struktury
+        plan = {};
         plan.explicit_skeleton = true;
-
         const int n = topo.n;
-        // SK-Loop wymaga minimum siatki 4x4 (w praktyce sensowne dla N>=6)
         if (n < 4) return false;
-
         const uint64_t full = pf_full_mask_for_n(n);
 
-        // Losujemy dwa różne rzędy i dwie różne kolumny
-        int r1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int r2 = r1;
-        int c1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int c2 = c1;
-
-        // Ograniczona pętla zapobiegająca nieskończonemu zawieszeniu
-        for (int g = 0; g < 64 && r2 == r1; ++g) {
-            r2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        }
-        for (int g = 0; g < 64 && c2 == c1; ++g) {
-            c2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        }
-
-        if (r1 == r2 || c1 == c2) return false;
-
-        // Wyznaczamy 4 wierzchołki (prostokąt)
-        const int a = r1 * n + c1;
-        const int b = r1 * n + c2;
-        const int c = r2 * n + c1;
-        const int d = r2 * n + c2;
-        if (topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(b)] ||
-            topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(c)] ||
-            topo.cell_box[static_cast<size_t>(a)] == topo.cell_box[static_cast<size_t>(d)] ||
-            topo.cell_box[static_cast<size_t>(b)] == topo.cell_box[static_cast<size_t>(c)] ||
-            topo.cell_box[static_cast<size_t>(b)] == topo.cell_box[static_cast<size_t>(d)] ||
-            topo.cell_box[static_cast<size_t>(c)] == topo.cell_box[static_cast<size_t>(d)]) {
-            return false;
-        }
-
-        // Wybieramy dwie cyfry rdzeniowe (core digits)
-        const int d1 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        int d2 = d1;
-        for (int g = 0; g < 64 && d2 == d1; ++g) {
-            d2 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        }
-        int d3 = d2;
-        for (int g = 0; g < 64 && (d3 == d1 || d3 == d2); ++g) {
-            d3 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        }
-
-        int d4 = d3;
-        for (int g = 0; g < 64 && (d4 == d1 || d4 == d2 || d4 == d3); ++g) {
-            d4 = static_cast<int>(rng() % static_cast<uint64_t>(n));
-        }
-
-        const uint64_t core = (1ULL << d1) | (1ULL << d2);
-
-        // Dodajemy cyfry wyjściowe dla dwóch wierzchołków by uniknąć natychmiastowego Unique Rectangle (Deadly Pattern)
-        // Ograniczamy do modulo n, żeby nie przekroczyć rozmiaru maski
-        const uint64_t ex1 = core | (1ULL << d3);
-        const uint64_t ex2 = core | (1ULL << d4);
-        const uint64_t wing = core | (1ULL << d3) | (1ULL << d4);
-
-        // Wstrzykujemy ograniczenia
-        // B i C to twarde węzły bivalue. A i D to węzły wyjściowe pętli.
-        plan.add_anchor(a, ex1 & full);
-        plan.add_anchor(b, core & full);
-        plan.add_anchor(c, core & full);
-        plan.add_anchor(d, ex2 & full);
-
-        int added = 0;
-        for (int cc = 0; cc < n && added < 1; ++cc) {
-            if (cc == c1 || cc == c2) continue;
-            if (plan.add_skeleton(r1 * n + cc, wing & full)) ++added;
-        }
-        added = 0;
-        for (int rr = 0; rr < n && added < 1; ++rr) {
-            if (rr == r1 || rr == r2) continue;
-            if (plan.add_skeleton(rr * n + c2, wing & full)) ++added;
-        }
-        if (dense_mode) {
-            added = 0;
-            for (int cc = 0; cc < n && added < 1; ++cc) {
-                if (cc == c1 || cc == c2) continue;
-                if (plan.add_skeleton(r2 * n + cc, wing & full)) ++added;
+        for (int tries = 0; tries < 512; ++tries) {
+            const int a = static_cast<int>(rng() % static_cast<uint64_t>(topo.nn));
+            const int r1 = topo.cell_row[static_cast<size_t>(a)];
+            const int c1 = topo.cell_col[static_cast<size_t>(a)];
+            int b = -1, c = -1, d = -1;
+            for (int idx = 0; idx < topo.nn; ++idx) {
+                if (idx != a && topo.cell_row[static_cast<size_t>(idx)] == r1 && topo.cell_col[static_cast<size_t>(idx)] != c1) { b = idx; break; }
             }
-            added = 0;
-            for (int rr = 0; rr < n && added < 1; ++rr) {
-                if (rr == r1 || rr == r2) continue;
-                if (plan.add_skeleton(rr * n + c1, wing & full)) ++added;
+            if (b < 0) continue;
+            for (int idx = 0; idx < topo.nn; ++idx) {
+                if (idx != a && topo.cell_col[static_cast<size_t>(idx)] == c1 && topo.cell_row[static_cast<size_t>(idx)] != r1) { c = idx; break; }
             }
-        }
+            if (c < 0) continue;
+            const int rr = topo.cell_row[static_cast<size_t>(c)];
+            const int cc = topo.cell_col[static_cast<size_t>(b)];
+            for (int idx = 0; idx < topo.nn; ++idx) {
+                if (topo.cell_row[static_cast<size_t>(idx)] == rr && topo.cell_col[static_cast<size_t>(idx)] == cc) { d = idx; break; }
+            }
+            if (d < 0 || d == a || d == b || d == c) continue;
 
-        plan.valid = (plan.anchor_count == 4 && plan.skeleton_count >= (dense_mode ? 8 : 6));
-        return plan.valid;
+            int x = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            int y = x; while (y == x) y = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            int z = y; while (z == x || z == y) z = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            int w = z; while (w == x || w == y || w == z) w = static_cast<int>(rng() % static_cast<uint64_t>(n));
+            const uint64_t core = (1ULL << x) | (1ULL << y);
+            plan.add_anchor(a, core);
+            plan.add_anchor(d, core);
+            plan.add_anchor(b, (core | (1ULL << z)) & full);
+            plan.add_anchor(c, (core | (1ULL << w) | (dense_mode ? (1ULL << z) : 0ULL)) & full);
+            plan.add_skeleton(a, core);
+            plan.add_skeleton(b, (1ULL << y) | (1ULL << z));
+            plan.add_skeleton(d, core);
+            plan.add_skeleton(c, (1ULL << x) | (1ULL << w));
+            plan.valid = plan.anchor_count >= 4;
+            return plan.valid;
+        }
+        return false;
     }
 };
 

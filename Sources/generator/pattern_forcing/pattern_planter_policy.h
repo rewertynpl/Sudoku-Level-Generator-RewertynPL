@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+
 #include "pattern_planter_types.h"
 
 namespace sudoku_hpc::pattern_forcing {
@@ -9,12 +12,10 @@ namespace sudoku_hpc::pattern_forcing {
 struct PatternStrategyPolicy {
     PatternKind kind = PatternKind::None;
     PatternGeneratorPolicy generator_policy = PatternGeneratorPolicy::Unsupported;
+    bool prefer_exact = false;
+    bool preserve_anchors = false;
+    bool suppress_equivalent_generics = false;
 };
-
-inline bool pattern_policy_supports_exact(PatternGeneratorPolicy policy) {
-    return policy == PatternGeneratorPolicy::ExactRequired ||
-           policy == PatternGeneratorPolicy::ExactPreferredFamilyFallback;
-}
 
 inline bool pattern_policy_requires_exact(PatternGeneratorPolicy policy) {
     return policy == PatternGeneratorPolicy::ExactRequired;
@@ -25,177 +26,139 @@ inline bool pattern_policy_allows_family_fallback(PatternGeneratorPolicy policy)
            policy == PatternGeneratorPolicy::FamilyOnly;
 }
 
-inline bool pattern_kind_is_chainish(PatternKind kind) {
-    switch (kind) {
-    case PatternKind::Chain:
-    case PatternKind::ForcingLike:
-    case PatternKind::ColorLike:
-    case PatternKind::AicLike:
-    case PatternKind::GroupedAicLike:
-    case PatternKind::GroupedCycleLike:
-    case PatternKind::NiceLoopLike:
-    case PatternKind::XChainLike:
-    case PatternKind::XYChainLike:
-    case PatternKind::RemotePairsLike:
-        return true;
+inline bool pattern_policy_supports_exact(PatternGeneratorPolicy policy) {
+    return policy == PatternGeneratorPolicy::ExactRequired ||
+           policy == PatternGeneratorPolicy::ExactPreferredFamilyFallback;
+}
+
+
+inline PatternKind pick_kind(RequiredStrategy required, int /*level*/) {
+    switch (required) {
+    case RequiredStrategy::Exocet:
+    case RequiredStrategy::SeniorExocet:
+        return PatternKind::ExocetLike;
+    case RequiredStrategy::SKLoop:
+        return PatternKind::LoopLike;
+    case RequiredStrategy::PatternOverlayMethod:
+    case RequiredStrategy::ForcingChains:
+    case RequiredStrategy::DynamicForcingChains:
+    case RequiredStrategy::MSLS:
+        return PatternKind::ForcingLike;
+    case RequiredStrategy::Medusa3D:
+    case RequiredStrategy::SimpleColoring:
+        return PatternKind::ColorLike;
+    case RequiredStrategy::SueDeCoq:
+    case RequiredStrategy::DeathBlossom:
+        return PatternKind::PetalLike;
+    case RequiredStrategy::PointingPairs:
+    case RequiredStrategy::BoxLineReduction:
+        return PatternKind::IntersectionLike;
+    case RequiredStrategy::XWing:
+    case RequiredStrategy::Swordfish:
+    case RequiredStrategy::Jellyfish:
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+    case RequiredStrategy::EmptyRectangle:
+    case RequiredStrategy::RemotePairs:
+        return PatternKind::FishLike;
+    case RequiredStrategy::FrankenFish:
+        return PatternKind::FrankenLike;
+    case RequiredStrategy::MutantFish:
+        return PatternKind::MutantLike;
+    case RequiredStrategy::Squirmbag:
+    case RequiredStrategy::KrakenFish:
+        return PatternKind::SquirmLike;
+    case RequiredStrategy::ALSXYWing:
+    case RequiredStrategy::ALSXZ:
+    case RequiredStrategy::ALSChain:
+    case RequiredStrategy::ALSAIC:
+    case RequiredStrategy::WXYZWing:
+        return PatternKind::AlsLike;
+    case RequiredStrategy::AlignedPairExclusion:
+    case RequiredStrategy::AlignedTripleExclusion:
+        return PatternKind::ExclusionLike;
+    case RequiredStrategy::AIC:
+        return PatternKind::AicLike;
+    case RequiredStrategy::GroupedAIC:
+        return PatternKind::GroupedAicLike;
+    case RequiredStrategy::GroupedXCycle:
+        return PatternKind::GroupedCycleLike;
+    case RequiredStrategy::ContinuousNiceLoop:
+        return PatternKind::NiceLoopLike;
+    case RequiredStrategy::XChain:
+        return PatternKind::XChainLike;
+    case RequiredStrategy::XYChain:
+        return PatternKind::XYChainLike;
     default:
-        return false;
+        return PatternKind::None;
     }
-}
-
-inline bool pattern_kind_is_fishish(PatternKind kind) {
-    switch (kind) {
-    case PatternKind::FishLike:
-    case PatternKind::FrankenLike:
-    case PatternKind::MutantLike:
-    case PatternKind::SquirmLike:
-    case PatternKind::SwordfishLike:
-    case PatternKind::JellyfishLike:
-    case PatternKind::FinnedFishLike:
-        return true;
-    default:
-        return false;
-    }
-}
-
-inline bool pattern_kind_is_loopish(PatternKind kind) {
-    switch (kind) {
-    case PatternKind::LoopLike:
-    case PatternKind::ExocetLike:
-    case PatternKind::EmptyRectangleLike:
-        return true;
-    default:
-        return false;
-    }
-}
-
-inline bool pattern_kind_is_intersectionish(PatternKind kind) {
-    return kind == PatternKind::IntersectionLike;
-}
-
-inline bool pattern_kind_is_alsish(PatternKind kind) {
-    return kind == PatternKind::AlsLike;
 }
 
 inline PatternStrategyPolicy pattern_strategy_policy(RequiredStrategy required, int level) {
-    (void)level;
+    PatternStrategyPolicy out{};
+    out.kind = pick_kind(required, level);
+    out.prefer_exact = level >= 6;
+    out.preserve_anchors = level >= 5;
+    out.suppress_equivalent_generics = level >= 6;
+
     switch (required) {
     case RequiredStrategy::None:
+    case RequiredStrategy::Backtracking:
+        out.generator_policy = PatternGeneratorPolicy::Unsupported;
         break;
-
-    // P1 - intersection family is supported, but should not pretend to be exact-only.
     case RequiredStrategy::PointingPairs:
     case RequiredStrategy::BoxLineReduction:
-        return {PatternKind::IntersectionLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    // P3/P4 fish/chain/color families.
-    case RequiredStrategy::XWing:
-    case RequiredStrategy::Swordfish:
-        return {PatternKind::SwordfishLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::Jellyfish:
-        return {PatternKind::JellyfishLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::FinnedXWingSashimi:
-    case RequiredStrategy::FinnedSwordfishJellyfish:
-        return {PatternKind::FinnedFishLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::Skyscraper:
-    case RequiredStrategy::TwoStringKite:
-    case RequiredStrategy::XChain:
-        return {PatternKind::XChainLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::XYChain:
-        return {PatternKind::XYChainLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::EmptyRectangle:
-        return {PatternKind::EmptyRectangleLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::RemotePairs:
-        return {PatternKind::RemotePairsLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    case RequiredStrategy::SimpleColoring:
-        return {PatternKind::ColorLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    // P5 - advanced ALS / fish / chain-like.
-    case RequiredStrategy::ALSXZ:
-    case RequiredStrategy::WXYZWing:
-        return {PatternKind::AlsLike, PatternGeneratorPolicy::ExactPreferredFamilyFallback};
-
-    // P6 - these are exact-only in the current contract and should not silently degrade.
-    case RequiredStrategy::Medusa3D:
-        return {PatternKind::ColorLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::AIC:
-        return {PatternKind::AicLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::GroupedAIC:
-        return {PatternKind::GroupedAicLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::GroupedXCycle:
-        return {PatternKind::GroupedCycleLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::ContinuousNiceLoop:
-        return {PatternKind::NiceLoopLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::ALSXYWing:
-    case RequiredStrategy::ALSChain:
-    case RequiredStrategy::ALSAIC:
-        return {PatternKind::AlsLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::AlignedPairExclusion:
-    case RequiredStrategy::AlignedTripleExclusion:
-        return {PatternKind::ExclusionLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::SueDeCoq:
-        return {PatternKind::IntersectionLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::DeathBlossom:
-        return {PatternKind::PetalLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::FrankenFish:
-        return {PatternKind::FrankenLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::MutantFish:
-        return {PatternKind::MutantLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::KrakenFish:
-        return {PatternKind::FishLike, PatternGeneratorPolicy::ExactRequired};
-
-    case RequiredStrategy::Squirmbag:
-        return {PatternKind::SquirmLike, PatternGeneratorPolicy::ExactRequired};
-
-    // P7 - theoretical/exact forcing family.
-    case RequiredStrategy::MSLS:
-        return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactRequired};
-
+        out.generator_policy = PatternGeneratorPolicy::FamilyOnly;
+        break;
     case RequiredStrategy::Exocet:
     case RequiredStrategy::SeniorExocet:
-        return {PatternKind::ExocetLike, PatternGeneratorPolicy::ExactRequired};
-
+    case RequiredStrategy::MSLS:
     case RequiredStrategy::SKLoop:
-        return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactRequired};
-
     case RequiredStrategy::PatternOverlayMethod:
-        return {PatternKind::LoopLike, PatternGeneratorPolicy::ExactRequired};
-
     case RequiredStrategy::ForcingChains:
     case RequiredStrategy::DynamicForcingChains:
-        return {PatternKind::ForcingLike, PatternGeneratorPolicy::ExactRequired};
-
+    case RequiredStrategy::Medusa3D:
+    case RequiredStrategy::AIC:
+    case RequiredStrategy::GroupedAIC:
+    case RequiredStrategy::GroupedXCycle:
+    case RequiredStrategy::ContinuousNiceLoop:
+    case RequiredStrategy::ALSXYWing:
+    case RequiredStrategy::ALSXZ:
+    case RequiredStrategy::ALSChain:
+    case RequiredStrategy::ALSAIC:
+    case RequiredStrategy::WXYZWing:
+    case RequiredStrategy::AlignedPairExclusion:
+    case RequiredStrategy::AlignedTripleExclusion:
+    case RequiredStrategy::SueDeCoq:
+    case RequiredStrategy::DeathBlossom:
+    case RequiredStrategy::FrankenFish:
+    case RequiredStrategy::MutantFish:
+    case RequiredStrategy::KrakenFish:
+    case RequiredStrategy::Squirmbag:
+    case RequiredStrategy::XChain:
+    case RequiredStrategy::XYChain:
+    case RequiredStrategy::XWing:
+    case RequiredStrategy::Swordfish:
+    case RequiredStrategy::Jellyfish:
+    case RequiredStrategy::FinnedXWingSashimi:
+    case RequiredStrategy::FinnedSwordfishJellyfish:
+    case RequiredStrategy::Skyscraper:
+    case RequiredStrategy::TwoStringKite:
+    case RequiredStrategy::EmptyRectangle:
+    case RequiredStrategy::RemotePairs:
+    case RequiredStrategy::SimpleColoring:
+        out.generator_policy = PatternGeneratorPolicy::ExactPreferredFamilyFallback;
+        break;
     default:
-        return {};
+        out.generator_policy = (out.kind == PatternKind::None)
+            ? PatternGeneratorPolicy::Unsupported
+            : PatternGeneratorPolicy::FamilyOnly;
+        break;
     }
 
-    // Family-only fallback when no concrete required strategy is selected.
-    if (level >= 7) return {PatternKind::ExocetLike, PatternGeneratorPolicy::FamilyOnly};
-    if (level >= 6) return {PatternKind::LoopLike, PatternGeneratorPolicy::FamilyOnly};
-    if (level >= 5) return {PatternKind::Chain, PatternGeneratorPolicy::FamilyOnly};
-    return {};
-}
-
-inline PatternKind pick_kind(RequiredStrategy required, int level) {
-    return pattern_strategy_policy(required, level).kind;
+    return out;
 }
 
 inline bool pattern_dispatch_wired(RequiredStrategy required, int level) {
@@ -204,7 +167,6 @@ inline bool pattern_dispatch_wired(RequiredStrategy required, int level) {
 
 inline bool pattern_exact_template_dispatch_wired(RequiredStrategy required, int /*level*/) {
     switch (required) {
-    // exact-template-backed advanced families
     case RequiredStrategy::Exocet:
     case RequiredStrategy::SeniorExocet:
     case RequiredStrategy::MSLS:
@@ -243,12 +205,9 @@ inline bool pattern_exact_template_dispatch_wired(RequiredStrategy required, int
     case RequiredStrategy::RemotePairs:
     case RequiredStrategy::SimpleColoring:
         return true;
-
-    // intersection family currently stays family-capable but not exact-template-advertised.
     case RequiredStrategy::PointingPairs:
     case RequiredStrategy::BoxLineReduction:
         return false;
-
     default:
         return false;
     }
@@ -299,6 +258,42 @@ inline const char* pattern_mutation_source_label(PatternMutationSource source) {
     case PatternMutationSource::Random:
     default:
         return "random";
+    }
+}
+
+struct PatternAttemptFeedbackStats {
+    uint64_t attempts = 0;
+    uint64_t exact_attempts = 0;
+    uint64_t analyzed_sum = 0;
+    uint64_t use_sum = 0;
+    uint64_t hit_sum = 0;
+    int best_template_score = -1;
+    PatternKind best_kind = PatternKind::None;
+};
+
+inline PatternAttemptFeedbackStats& tls_pattern_attempt_feedback_stats() {
+    thread_local PatternAttemptFeedbackStats s;
+    return s;
+}
+
+inline void note_template_attempt_feedback(
+    RequiredStrategy /*required*/,
+    PatternKind kind,
+    bool exact_template,
+    int template_score,
+    int analyzed,
+    int use_count,
+    int hit_count) {
+
+    PatternAttemptFeedbackStats& s = tls_pattern_attempt_feedback_stats();
+    ++s.attempts;
+    if (exact_template) ++s.exact_attempts;
+    s.analyzed_sum += static_cast<uint64_t>(std::max(analyzed, 0));
+    s.use_sum += static_cast<uint64_t>(std::max(use_count, 0));
+    s.hit_sum += static_cast<uint64_t>(std::max(hit_count, 0));
+    if (template_score > s.best_template_score) {
+        s.best_template_score = template_score;
+        s.best_kind = kind;
     }
 }
 

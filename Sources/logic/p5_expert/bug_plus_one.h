@@ -71,10 +71,10 @@ inline ApplyResult apply_bug_plus_one(CandidateState& st, StrategyStats& s, Gene
     // na złamanie pętli BUG'a (taka, która występuje nieparzyście w rejonach p-ta)
     uint64_t w = m;
     while (w != 0ULL) {
-        const uint64_t bit = config::bit_ctz_u64(w);
+        const int bit_index = config::bit_ctz_u64(w);
         w = config::bit_clear_lsb_u64(w);
         
-        const int d = static_cast<int>(bit) + 1;
+        const int d = bit_index + 1;
         int cnt_row = 0;
         int cnt_col = 0;
         int cnt_box = 0;
@@ -82,17 +82,17 @@ inline ApplyResult apply_bug_plus_one(CandidateState& st, StrategyStats& s, Gene
         for (int c = 0; c < st.topo->n; ++c) {
             const int idx = bug_row * st.topo->n + c;
             if (st.board->values[idx] != 0) continue;
-            if ((st.cands[idx] & (1ULL << bit)) != 0ULL) ++cnt_row;
+            if ((st.cands[idx] & (1ULL << bit_index)) != 0ULL) ++cnt_row;
         }
         for (int rr = 0; rr < st.topo->n; ++rr) {
             const int idx = rr * st.topo->n + bug_col;
             if (st.board->values[idx] != 0) continue;
-            if ((st.cands[idx] & (1ULL << bit)) != 0ULL) ++cnt_col;
+            if ((st.cands[idx] & (1ULL << bit_index)) != 0ULL) ++cnt_col;
         }
         for (int idx = 0; idx < st.topo->nn; ++idx) {
             if (st.topo->cell_box[idx] != bug_box) continue;
             if (st.board->values[idx] != 0) continue;
-            if ((st.cands[idx] & (1ULL << bit)) != 0ULL) ++cnt_box;
+            if ((st.cands[idx] & (1ULL << bit_index)) != 0ULL) ++cnt_box;
         }
         
         // Ratunkiem dla BUG jest ta cyfra, która zaburza parzystość wystąpień we 

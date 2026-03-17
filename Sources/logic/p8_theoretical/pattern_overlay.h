@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // ModuĹ‚: pattern_overlay.h (Poziom 8 - Theoretical)
 // Opis: Algorytm Pattern Overlay Method (POM). Przeszukuje czÄ™Ĺ›ciowe, 
@@ -1798,4 +1798,3 @@ inline ApplyResult apply_pattern_overlay_method(CandidateState& st, StrategyStat
 }
 
 } // namespace sudoku_hpc::logic::p8_theoretical
-

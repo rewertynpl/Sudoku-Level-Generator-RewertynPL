@@ -31,6 +31,12 @@ inline ApplyResult eliminate_from_row_outside_box(
             continue;
         }
         const int idx = row * n + c;
+        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+            continue;
+        }
+        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+            continue;
+        }
         const ApplyResult er = st.eliminate(idx, bit);
         if (er == ApplyResult::Contradiction) {
             return er;
@@ -54,6 +60,12 @@ inline ApplyResult eliminate_from_col_outside_box(
             continue;
         }
         const int idx = r * n + col;
+        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+            continue;
+        }
+        if (st.board->values[idx] != 0 || (st.cands[idx] & bit) == 0ULL) {
+            continue;
+        }
         const ApplyResult er = st.eliminate(idx, bit);
         if (er == ApplyResult::Contradiction) {
             return er;

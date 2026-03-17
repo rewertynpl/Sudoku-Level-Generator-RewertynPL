@@ -1,4 +1,4 @@
-﻿//Author copyright Marcin Matysek (Rewertyn)
+//Author copyright Marcin Matysek (Rewertyn)
 
 #include <atomic>
 #include <chrono>
@@ -414,6 +414,8 @@ inline void print_production_help(std::ostream& out) {
     out << "  --max-attempts <uint64>         Max attempts across all workers (0=unlimited)\n";
     out << "  --max-total-time-s <uint64>     Global runtime timeout (0=none)\n";
     out << "  --run-quality-benchmark <file>  Write strategy audit report (.txt + .csv)\n";
+    out << "  --quality-benchmark <file>      Alias for --run-quality-benchmark\n";
+    out << "  --smoke-audit <file>            Alias for --run-quality-benchmark\n";
     out << "  --list-geometries               Print supported geometries\n";
     out << "  --validate-geometry             Validate current --box-rows/--box-cols\n";
     out << "  --validate-geometry-catalog     Validate full geometry catalog\n";
@@ -507,10 +509,11 @@ int main(int argc, char** argv) {
             parse_result.run_asym_pair_benchmark ||
             parse_result.run_vip_benchmark ||
             parse_result.run_vip_gate ||
-            cfg.stage_start || cfg.stage_end || cfg.perf_ab_suite ||
-            parse_result.benchmark_mode) {
+            cfg.stage_start || cfg.stage_end || cfg.perf_ab_suite) {
             std::cout << "Selected maintenance mode is not wired in this runtime build yet. "
                       << "Running normal generation with provided config.\n";
+        } else if (parse_result.benchmark_mode) {
+            std::cout << "Benchmark/smoke mode enabled. Running generation with strict reporting hooks.\n";
         }
 
         std::atomic<bool> cancel_flag{false};
@@ -578,3 +581,5 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+
+

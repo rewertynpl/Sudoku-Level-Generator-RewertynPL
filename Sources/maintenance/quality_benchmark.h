@@ -1,3 +1,4 @@
+
 // ============================================================================
 // SUDOKU HPC - QUALITY BENCHMARK / STRATEGY AUDIT
 // File: quality_benchmark.h
@@ -159,6 +160,9 @@ inline bool write_quality_benchmark_report(
     txt << "Generated: " << std::asctime(&tm_now);
     txt << "\n";
     txt << "[Summary]\n";
+    txt << "corridor_policy=named-before-generic\n";
+    txt << "smoke_use_metric=selected-step-per-slot\n";
+    txt << "smoke_hit_metric=effective-progress-per-slot\n";
     txt << "total_slots=" << summary.total_slots << "\n";
     txt << "canonical_full=" << summary.canonical_full << "\n";
     txt << "textbook_full=" << summary.textbook_full << "\n";
@@ -203,6 +207,8 @@ inline bool write_quality_benchmark_report(
     });
     if (max_cases > 0 && max_cases < rows.size()) {
         rows.resize(static_cast<size_t>(max_cases));
+    } else if (max_cases == 0) {
+        max_cases = static_cast<uint64_t>(rows.size());
     }
 
     for (const auto& row : rows) {
@@ -212,8 +218,20 @@ inline bool write_quality_benchmark_report(
             : StrategySmokeProfile{};
         const bool primary_exact_contract_required =
             row.exact_contract_required && primary.exact_contract_required;
+        const ClueRange primary_generator_clues = resolve_auto_clue_range(primary.box_rows, primary.box_cols, primary.difficulty, row.required_strategy, AutoClueWindowPolicy::Generator);
+        const ClueRange primary_certifier_clues = resolve_auto_clue_range(primary.box_rows, primary.box_cols, primary.difficulty, row.required_strategy, AutoClueWindowPolicy::Certifier);
+        const uint64_t primary_min_use =
+            std::max<uint64_t>(primary.min_required_use, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
+        const uint64_t primary_min_hit =
+            std::max<uint64_t>(primary.min_required_hit, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
         const bool asymmetric_exact_contract_required =
             row.exact_contract_required && asymmetric.exact_contract_required;
+        const ClueRange asymmetric_generator_clues = asymmetric.enabled ? resolve_auto_clue_range(asymmetric.box_rows, asymmetric.box_cols, asymmetric.difficulty, row.required_strategy, AutoClueWindowPolicy::Generator) : ClueRange{};
+        const ClueRange asymmetric_certifier_clues = asymmetric.enabled ? resolve_auto_clue_range(asymmetric.box_rows, asymmetric.box_cols, asymmetric.difficulty, row.required_strategy, AutoClueWindowPolicy::Certifier) : ClueRange{};
+        const uint64_t asymmetric_min_use =
+            std::max<uint64_t>(asymmetric.min_required_use, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
+        const uint64_t asymmetric_min_hit =
+            std::max<uint64_t>(asymmetric.min_required_hit, row.required_strategy == RequiredStrategy::None ? 0ULL : 1ULL);
         const std::string seedability = generator_seedability_label(row);
         const std::string roadmap_lane = roadmap_lane_label(row);
         StrategySmokeProfile primary_export = primary;
@@ -237,6 +255,8 @@ inline bool write_quality_benchmark_report(
             << " fallback=" << bool_flag(row.generator_family_fallback_wired)
             << " smoke=" << bool_flag(row.smoke_profile_present)
             << " seedability=" << seedability
+            << " primary_generator_clues=" << primary_generator_clues.min_clues << "-" << primary_generator_clues.max_clues
+            << " primary_certifier_clues=" << primary_certifier_clues.min_clues << "-" << primary_certifier_clues.max_clues
             << "\n";
 
         csv
@@ -276,10 +296,12 @@ inline bool write_quality_benchmark_report(
             << bool_flag(primary.allow_proxy_advanced) << ","
             << primary.max_total_time_s << ","
             << primary.max_attempts << ","
-            << primary.min_required_use << ","
-            << primary.min_required_hit << ","
+            << primary_min_use << ","
+            << primary_min_hit << ","
             << bool_flag(primary_exact_contract_required) << ","
             << csv_escape(primary_cli) << ","
+            << csv_escape(std::to_string(primary_generator_clues.min_clues) + "-" + std::to_string(primary_generator_clues.max_clues)) << ","
+            << csv_escape(std::to_string(primary_certifier_clues.min_clues) + "-" + std::to_string(primary_certifier_clues.max_clues)) << ","
             << csv_escape(asymmetric.variant_label) << ","
             << asymmetric.box_rows << ","
             << asymmetric.box_cols << ","
@@ -291,10 +313,12 @@ inline bool write_quality_benchmark_report(
             << bool_flag(asymmetric.allow_proxy_advanced) << ","
             << asymmetric.max_total_time_s << ","
             << asymmetric.max_attempts << ","
-            << asymmetric.min_required_use << ","
-            << asymmetric.min_required_hit << ","
+            << asymmetric_min_use << ","
+            << asymmetric_min_hit << ","
             << bool_flag(asymmetric_exact_contract_required) << ","
-            << csv_escape(asymmetric_cli)
+            << csv_escape(asymmetric_cli) << ","
+            << csv_escape(std::to_string(asymmetric_generator_clues.min_clues) + "-" + std::to_string(asymmetric_generator_clues.max_clues)) << ","
+            << csv_escape(std::to_string(asymmetric_certifier_clues.min_clues) + "-" + std::to_string(asymmetric_certifier_clues.max_clues))
             << "\n";
     }
 
@@ -333,3 +357,5 @@ inline bool write_quality_benchmark_report(
 }
 
 } // namespace sudoku_hpc::maintenance
+
+

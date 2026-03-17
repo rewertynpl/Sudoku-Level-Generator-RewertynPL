@@ -574,3 +574,6 @@ inline bool try_exact_templates_for_level(
 }
 
 } // namespace sudoku_hpc::pattern_forcing
+
+
+

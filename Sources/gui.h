@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "utils/logging.h"
 #include "config/run_config.h"

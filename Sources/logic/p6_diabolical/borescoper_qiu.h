@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // ModuĹ‚: borescoper_qiu.h (Poziom 6 - Diabolical)
 // Opis: Implementacja strategii z rodziny "Deadly Patterns" - ze szczegĂłlnym 

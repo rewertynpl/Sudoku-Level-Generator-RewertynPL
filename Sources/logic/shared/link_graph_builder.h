@@ -1,3 +1,4 @@
+
 // ============================================================================
 // SUDOKU HPC - LOGIC ENGINE SHARED
 // Moduł: link_graph_builder.h
@@ -18,6 +19,10 @@
 #include "../../core/candidate_state.h"
 
 namespace sudoku_hpc::logic::shared {
+
+inline int candidate_house_row(int n, int cell_row) { return cell_row; }
+inline int candidate_house_col(int n, int cell_col) { return n + cell_col; }
+inline int candidate_house_box(int n, int cell_box) { return (n << 1) + cell_box; }
 
 inline bool dyn_has_strong_edge(const ExactPatternScratchpad& sp, int u, int v) {
     for (int i = 0; i < sp.dyn_strong_edge_count; ++i) {
@@ -40,7 +45,7 @@ inline bool dyn_has_weak_edge(const ExactPatternScratchpad& sp, int u, int v) {
 inline void dyn_add_strong_edge(ExactPatternScratchpad& sp, int u, int v) {
     if (u < 0 || v < 0 || u == v) return;
     if (dyn_has_strong_edge(sp, u, v)) return;
-    if (sp.dyn_strong_edge_count >= (ExactPatternScratchpad::MAX_HOUSES * 2)) return;
+    if (sp.dyn_strong_edge_count >= ExactPatternScratchpad::MAX_LINK_EDGES) return;
 
     sp.dyn_strong_edge_u[sp.dyn_strong_edge_count] = u;
     sp.dyn_strong_edge_v[sp.dyn_strong_edge_count] = v;
@@ -87,9 +92,9 @@ inline bool node_is_subset_of_house(const CandidateState& st,
                                     int n) {
     for (int i = node_cell_begin(sp, node); i < node_cell_end(sp, node); ++i) {
         const int c = sp.adj_flat[i];
-        const int row_h = st.topo->cell_row[c];
-        const int col_h = n + st.topo->cell_col[c];
-        const int box_h = (n << 1) + st.topo->cell_box[c];
+        const int row_h = candidate_house_row(n, st.topo->cell_row[c]);
+        const int col_h = candidate_house_col(n, st.topo->cell_col[c]);
+        const int box_h = candidate_house_box(n, st.topo->cell_box[c]);
         if (house_id != row_h && house_id != col_h && house_id != box_h) {
             return false;
         }
@@ -457,3 +462,5 @@ inline bool build_grouped_link_graph_for_digit(const CandidateState& st,
 }
 
 } // namespace sudoku_hpc::logic::shared
+
+

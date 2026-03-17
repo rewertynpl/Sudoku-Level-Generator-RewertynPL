@@ -162,20 +162,45 @@ inline GenerateRunResult run_generic_sudoku(
         (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues);
     const std::string measurement_profile = detect_measurement_profile(run_cfg);
 
+    ClueRange shared_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy);
+    ClueRange generator_auto_range = shared_auto_range;
+    ClueRange certifier_auto_range = shared_auto_range;
+
+#if defined(__cpp_decltype_auto) || 1
+    generator_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, AutoClueWindowPolicy::Generator);
+    certifier_auto_range =
+        resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy, AutoClueWindowPolicy::Certifier);
+#endif
+
     if (run_cfg.min_clues <= 0 || run_cfg.max_clues <= 0 || run_cfg.max_clues < run_cfg.min_clues) {
-        const ClueRange auto_range = resolve_auto_clue_range(run_cfg.box_rows, run_cfg.box_cols, run_cfg.difficulty_level_required, run_cfg.required_strategy);
-        if (run_cfg.min_clues <= 0) run_cfg.min_clues = auto_range.min_clues;
-        if (run_cfg.max_clues <= 0) run_cfg.max_clues = auto_range.max_clues;
+        if (run_cfg.min_clues <= 0) run_cfg.min_clues = generator_auto_range.min_clues;
+        if (run_cfg.max_clues <= 0) run_cfg.max_clues = generator_auto_range.max_clues;
         if (run_cfg.max_clues < run_cfg.min_clues) run_cfg.max_clues = run_cfg.min_clues;
     }
+
     if (auto_clue_range_requested && run_cfg.difficulty_level_required >= 9) {
         const int relaxed_min = std::max(run_cfg.min_clues, std::max(4, n));
         const int relaxed_max = std::max(relaxed_min, static_cast<int>(0.70 * static_cast<double>(nn)));
         run_cfg.min_clues = relaxed_min;
         run_cfg.max_clues = relaxed_max;
+
+        generator_auto_range.min_clues = std::max(generator_auto_range.min_clues, relaxed_min);
+        generator_auto_range.max_clues = std::max(generator_auto_range.max_clues, relaxed_max);
+        if (generator_auto_range.max_clues < generator_auto_range.min_clues) {
+            generator_auto_range.max_clues = generator_auto_range.min_clues;
+        }
     }
+
     run_cfg.min_clues = std::clamp(run_cfg.min_clues, 0, nn);
     run_cfg.max_clues = std::clamp(run_cfg.max_clues, run_cfg.min_clues, nn);
+
+    generator_auto_range.min_clues = std::clamp(generator_auto_range.min_clues, 0, nn);
+    generator_auto_range.max_clues = std::clamp(generator_auto_range.max_clues, generator_auto_range.min_clues, nn);
+    certifier_auto_range.min_clues = std::clamp(certifier_auto_range.min_clues, 0, nn);
+    certifier_auto_range.max_clues = std::clamp(certifier_auto_range.max_clues, certifier_auto_range.min_clues, nn);
+
     result.effective_min_clues = run_cfg.min_clues;
     result.effective_max_clues = run_cfg.max_clues;
 
@@ -341,7 +366,10 @@ inline GenerateRunResult run_generic_sudoku(
         "runner",
         "config " + cfg_diag_label(run_cfg) +
         " measurement_profile=" + measurement_profile +
-        " clue_range=" + std::to_string(run_cfg.min_clues) + "-" + std::to_string(run_cfg.max_clues));
+        " clue_range=" + std::to_string(run_cfg.min_clues) + "-" + std::to_string(run_cfg.max_clues) +
+        " goldilocks_shared=" + std::to_string(shared_auto_range.min_clues) + "-" + std::to_string(shared_auto_range.max_clues) +
+        " goldilocks_generator=" + std::to_string(generator_auto_range.min_clues) + "-" + std::to_string(generator_auto_range.max_clues) +
+        " goldilocks_certifier=" + std::to_string(certifier_auto_range.min_clues) + "-" + std::to_string(certifier_auto_range.max_clues));
 
     std::mutex write_mu;
 

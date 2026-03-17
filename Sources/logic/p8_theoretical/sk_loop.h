@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // ModuĹ‚: sk_loop.h (Poziom 8 - Theoretical)
 // Opis: Algorytm rozwiÄ…zujÄ…cy cykle oparte na SK-Loop (Stephen Kurz Loop).
@@ -374,5 +374,3 @@ inline ApplyResult apply_sk_loop(CandidateState& st, StrategyStats& s, GenericLo
 }
 
 } // namespace sudoku_hpc::logic::p8_theoretical
-
-

@@ -64,9 +64,10 @@ inline ApplyResult apply_empty_rectangle(CandidateState& st, StrategyStats& s, G
                 }
             }
 
-            // Pusty prostokąt wymaga co najmniej 2 kandydatów. 
-            // Odcinamy też przepełnione bloki (powyżej 9 z reguły nie tworzy ER)
-            if (sp.als_cell_count < 2 || sp.als_cell_count > 9) continue;
+            // Pusty prostokąt wymaga co najmniej 2 kandydatów.
+            // Górny limit musi wynikać z rzeczywistego rozmiaru bloku, a nie z 9x9.
+            const int box_cell_cap = st.topo->box_rows * st.topo->box_cols;
+            if (sp.als_cell_count < 2 || sp.als_cell_count > box_cell_cap) continue;
 
             // Szukamy punktu przecięcia (er_r, er_c) tworzącego kształt "L" lub "+"
             bool is_er = false;

@@ -1,4 +1,4 @@
-﻿//Author copyright Marcin Matysek (Rewertyn)
+//Author copyright Marcin Matysek (Rewertyn)
 
 #pragma once
 

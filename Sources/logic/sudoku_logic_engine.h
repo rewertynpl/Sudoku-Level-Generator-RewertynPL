@@ -1,4 +1,3 @@
-﻿
 // ============================================================================
 // SUDOKU HPC - LOGIC ENGINE
 // ModuĹ‚: sudoku_logic_engine.h
@@ -23,6 +22,7 @@
 #include "../generator/core_engines/dlx_solver.h" // dla SearchAbortControl
 #include "../generator/pattern_forcing/pattern_planter.h"
 #include "logic_result.h"
+#include "shared/required_strategy_gate.h"
 
 // ============================================================================
 // DOĹÄ„CZENIE WSZYSTKICH SPECJALISTYCZNYCH MODUĹĂ“W (P1 - P8)
@@ -680,23 +680,77 @@ struct GenericLogicCertify {
         return false;
     }
 
+
 private:
+    static bool suppress_slot_in_required_corridor(size_t slot) {
+        using namespace shared;
+        const RequiredStrategy rs = current_required_exact_strategy();
+        if (rs == RequiredStrategy::None) {
+            return false;
+        }
+        const RequiredStrategy slot_rs = required_strategy_for_slot(slot);
+        if (slot_rs == rs) {
+            return false;
+        }
+
+        switch (rs) {
+        case RequiredStrategy::ALSXZ:
+            return slot_rs == RequiredStrategy::XYChain ||
+                   slot_rs == RequiredStrategy::XChain ||
+                   slot_rs == RequiredStrategy::AIC ||
+                   slot_rs == RequiredStrategy::GroupedAIC ||
+                   slot_rs == RequiredStrategy::ALSAIC;
+        case RequiredStrategy::ALSXYWing:
+            return slot_rs == RequiredStrategy::AIC ||
+                   slot_rs == RequiredStrategy::GroupedAIC ||
+                   slot_rs == RequiredStrategy::ALSAIC ||
+                   slot_rs == RequiredStrategy::ALSChain;
+        case RequiredStrategy::ALSChain:
+            return slot_rs == RequiredStrategy::AIC ||
+                   slot_rs == RequiredStrategy::GroupedAIC ||
+                   slot_rs == RequiredStrategy::ALSAIC;
+        case RequiredStrategy::FinnedSwordfishJellyfish:
+            return slot_rs == RequiredStrategy::Swordfish ||
+                   slot_rs == RequiredStrategy::Jellyfish ||
+                   slot_rs == RequiredStrategy::FinnedXWingSashimi;
+        case RequiredStrategy::Exocet:
+        case RequiredStrategy::SeniorExocet:
+        case RequiredStrategy::SKLoop:
+        case RequiredStrategy::PatternOverlayMethod:
+            return slot_rs == RequiredStrategy::ForcingChains ||
+                   slot_rs == RequiredStrategy::DynamicForcingChains;
+        case RequiredStrategy::WXYZWing:
+            return slot_rs == RequiredStrategy::XYChain ||
+                   slot_rs == RequiredStrategy::XChain ||
+                   slot_rs == RequiredStrategy::AIC;
+        case RequiredStrategy::SueDeCoq:
+        case RequiredStrategy::DeathBlossom:
+            return slot_rs == RequiredStrategy::AIC ||
+                   slot_rs == RequiredStrategy::GroupedAIC ||
+                   slot_rs == RequiredStrategy::ALSAIC;
+        default:
+            return false;
+        }
+    }
+
     static inline void note_strategy_slot(GenericLogicCertifyResult& result, size_t slot, ApplyResult ar) {
         if (ar == ApplyResult::NoProgress) {
             return;
         }
         const StrategyMeta& meta = strategy_meta_for_slot(slot);
+        const uint16_t hit_delta = (ar == ApplyResult::Progress) ? 1U : 0U;
         result.record_step(
             static_cast<uint16_t>(slot),
             meta.impl_tier,
             ar,
             0,
-            0,
+            hit_delta,
             meta.proof_tag);
     }
 
-    // GĹĂ“WNA PÄTLA CERTYFIKATORA LOGICZNEGO
+    // GŁÓWNA PĘTLA CERTYFIKATORA LOGICZNEGO
     static ApplyResult apply_round_up_to_level(CandidateState& st, GenericLogicCertifyResult& result, int max_level) {
+
         
         // ====================================================================
         // POZIOM 1: EASY
@@ -752,9 +806,9 @@ private:
         // ====================================================================
         // POZIOM 5: DIABOLICAL / EXPERT (ZĹ‚oĹĽone Ryby, W-Wing, Coloring)
         // ====================================================================
-        ar = p4_hard::apply_swordfish(st, result.strategy_stats[SlotSwordfish], result);
+        if (!suppress_slot_in_required_corridor(SlotSwordfish)) ar = p4_hard::apply_swordfish(st, result.strategy_stats[SlotSwordfish], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSwordfish, ar); return ar; }
-        ar = p5_expert::apply_finned_x_wing_sashimi(st, result.strategy_stats[SlotFinnedXWingSashimi], result);
+        if (!suppress_slot_in_required_corridor(SlotFinnedXWingSashimi)) ar = p5_expert::apply_finned_x_wing_sashimi(st, result.strategy_stats[SlotFinnedXWingSashimi], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotFinnedXWingSashimi, ar); return ar; }
         ar = p5_expert::apply_simple_coloring(st, result.strategy_stats[SlotSimpleColoring], result);
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotSimpleColoring, ar); return ar; }
@@ -773,7 +827,7 @@ private:
         // POZIOM 6: NIGHTMARE / DIABOLICAL (Specyficzne Ryby, ALS, Deadly Patterns, Łańcuchy)
         // Reguła architektoniczna: Named structures przed generycznymi chainami.
         // ====================================================================
-        ar = p6_diabolical::apply_jellyfish(st, result.strategy_stats[SlotJellyfish], result);
+        if (!suppress_slot_in_required_corridor(SlotJellyfish)) ar = p6_diabolical::apply_jellyfish(st, result.strategy_stats[SlotJellyfish], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotJellyfish, ar); return ar; }
 
         ar = p6_diabolical::apply_finned_swordfish_jellyfish(st, result.strategy_stats[SlotFinnedSwordfishJellyfish], result);
@@ -803,9 +857,9 @@ private:
         ar = p6_diabolical::apply_borescoper_qiu_deadly_pattern(st, result.strategy_stats[SlotBorescoperQiuDeadlyPattern], result);
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotBorescoperQiuDeadlyPattern, ar); return ar; }
 
-        ar = p6_diabolical::apply_xy_chain(st, result.strategy_stats[SlotXYChain], result);
+        if (!suppress_slot_in_required_corridor(SlotXYChain)) ar = p6_diabolical::apply_xy_chain(st, result.strategy_stats[SlotXYChain], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXYChain, ar); return ar; }
-        ar = p6_diabolical::apply_x_chain(st, result.strategy_stats[SlotXChain], result);
+        if (!suppress_slot_in_required_corridor(SlotXChain)) ar = p6_diabolical::apply_x_chain(st, result.strategy_stats[SlotXChain], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotXChain, ar); return ar; }
         
         if (max_level <= 6) return ApplyResult::NoProgress;
@@ -842,11 +896,11 @@ private:
         ar = p7_nightmare::apply_grouped_x_cycle(st, result.strategy_stats[SlotGroupedXCycle], result);
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotGroupedXCycle, ar); return ar; }
 
-        ar = p7_nightmare::apply_aic(st, result.strategy_stats[SlotAIC], result);
+        if (!suppress_slot_in_required_corridor(SlotAIC)) ar = p7_nightmare::apply_aic(st, result.strategy_stats[SlotAIC], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotAIC, ar); return ar; }
-        ar = p7_nightmare::apply_grouped_aic(st, result.strategy_stats[SlotGroupedAIC], result);
+        if (!suppress_slot_in_required_corridor(SlotGroupedAIC)) ar = p7_nightmare::apply_grouped_aic(st, result.strategy_stats[SlotGroupedAIC], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotGroupedAIC, ar); return ar; }
-        ar = p7_nightmare::apply_als_aic(st, result.strategy_stats[SlotALSAIC], result);
+        if (!suppress_slot_in_required_corridor(SlotALSAIC)) ar = p7_nightmare::apply_als_aic(st, result.strategy_stats[SlotALSAIC], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotALSAIC, ar); return ar; }
         
         if (max_level <= 7) return ApplyResult::NoProgress;
@@ -867,9 +921,9 @@ private:
         ar = p8_theoretical::apply_pattern_overlay_method(st, result.strategy_stats[SlotPatternOverlayMethod], result);
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotPatternOverlayMethod, ar); return ar; }
         
-        ar = p8_theoretical::apply_forcing_chains(st, result.strategy_stats[SlotForcingChains], result);
+        if (!suppress_slot_in_required_corridor(SlotForcingChains)) ar = p8_theoretical::apply_forcing_chains(st, result.strategy_stats[SlotForcingChains], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotForcingChains, ar); return ar; }
-        ar = p8_theoretical::apply_dynamic_forcing_chains(st, result.strategy_stats[SlotDynamicForcingChains], result);
+        if (!suppress_slot_in_required_corridor(SlotDynamicForcingChains)) ar = p8_theoretical::apply_dynamic_forcing_chains(st, result.strategy_stats[SlotDynamicForcingChains], result); else ar = ApplyResult::NoProgress;
         if (ar != ApplyResult::NoProgress) { note_strategy_slot(result, SlotDynamicForcingChains, ar); return ar; }
 
         return ApplyResult::NoProgress;
@@ -960,6 +1014,8 @@ public:
 };
 
 } // namespace sudoku_hpc::logic
+
+
 
 
 
